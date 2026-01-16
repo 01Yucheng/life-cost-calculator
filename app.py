@@ -42,10 +42,11 @@ def load_data_from_github():
         file_content = repo.get_contents("house_data.csv")
         return pd.read_csv(BytesIO(file_content.decoded_content))
     except Exception:
-        # 保持与初始化 Session State 相同的列结构
+        # 在此处加入了：头金(初期), 礼金押金 字段
         return pd.DataFrame(columns=[
             "房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", 
-            "学时(分)", "学费(单程)", "学定期(月)", "塾时(分)", "塾费(单程)", "塾定期(月)", "线路概要"
+            "头金(初期)", "礼金押金", "学时(分)", "学费(单程)", "学定期(月)", 
+            "塾时(分)", "塾费(单程)", "塾定期(月)", "线路概要"
         ])
 
 def save_data_to_github(df):
@@ -123,6 +124,11 @@ with st.expander("➕ 录入新房源 (可拖入照片)", expanded=True):
         name_in = n_col.text_input("🏠 房源名称", placeholder="例如：中野新村")
         loc_in = l_col.text_input("📍 最近车站", placeholder="例如：中野駅")
         rent_in = r_col.number_input("💰 预估月租", value=80000)
+        
+        # 新增初期开支输入项
+        i_col1, i_col2 = st.columns(2)
+        initial_cost_in = i_col1.number_input("🔑 头金/初期总计(円)", value=0, step=10000)
+        gift_deposit_in = i_col2.text_input("💴 礼金押金描述", placeholder="例如：礼1押1")
     
     with c2:
         uploaded_file = st.file_uploader("🖼️ 房源照片/截图", type=['png', 'jpg', 'jpeg'])
@@ -141,6 +147,8 @@ with st.expander("➕ 录入新房源 (可拖入照片)", expanded=True):
                         "房源图片": img_data,
                         "月房租(円)": rent_in,
                         "管理费(円)": 5000,
+                        "头金(初期)": initial_cost_in,
+                        "礼金押金": gift_deposit_in,
                         "学时(分)": s_data['mins'],
                         "学费(单程)": s_data['yen'],
                         "学定期(月)": s_data.get('pass_month', s_data['yen'] * 18),
@@ -161,6 +169,7 @@ edited_df = st.data_editor(
     column_config={
         "房源图片": st.column_config.ImageColumn("预览"),
         "月房租(円)": st.column_config.NumberColumn(format="%d"),
+        "头金(初期)": st.column_config.NumberColumn(format="%d 円"),
     },
     key="house_editor_pro"
 )
@@ -213,8 +222,8 @@ if not edited_df.empty:
                 with info_c:
                     st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
                     st.write(f"💰 **预估月总支出: {int(total_m):,} 円**")
-                    st.write(f"🏠 房租+管理: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 最佳月通勤: {int(best_s_commute + best_j_commute):,}")
-                    # 此处已将“线路概要”替换为“单程耗时”
+                    # 在此处展示初期开支
+                    st.write(f"🏠 房租+管理: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🔑 初期费用: {int(row.get('头金(初期)', 0)):,} ({row.get('礼金押金', '无')})")
                     st.caption(f"⏱️ 单程耗时: 学校 {row['学时(分)']}分 / 私塾 {row['塾时(分)']}分 | 建议：学校-{s_advice} / 私塾-{j_advice}")
                 
                 with btn_c:
@@ -226,4 +235,3 @@ if not edited_df.empty:
     if st.button("🗑️ 清空所有数据"):
         st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
         st.rerun()
-
