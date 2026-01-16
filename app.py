@@ -5,8 +5,6 @@ import io
 import base64
 from PIL import Image
 import urllib.parse
-import re
-import json
 import google.generativeai as genai
 
 # --- 1. GitHub 存储类 ---
@@ -28,79 +26,80 @@ class GitHubStorage:
         csv_content = df.to_csv(index=False, encoding='utf-8-sig')
         try:
             contents = self.repo.get_contents(self.file_path, ref=self.branch)
-            self.repo.update_file(self.file_path, "update data", csv_content, contents.sha, branch=self.branch)
+            self.repo.update_file(self.file_path, "update housing data", csv_content, contents.sha, branch=self.branch)
         except:
-            self.repo.create_file(self.file_path, "initial data", csv_content, branch=self.branch)
+            self.repo.create_file(self.file_path, "initial housing data", csv_content, branch=self.branch)
 
-# --- 2. 初始化与 AI 配置 ---
+# --- 2. 初始化 ---
 st.set_page_config(page_title="东京生活成本 AI 计算器", layout="wide")
 storage = GitHubStorage()
 
 if "df_houses" not in st.session_state:
     st.session_state.df_houses = storage.load_data()
 
-@st.cache_resource
-def init_ai():
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    return genai.GenerativeModel("models/gemini-1.5-flash")
+# --- 3. UI 渲染 ---
+st.title("🗼 东京生活成本 AI 计算器")
 
-model = init_ai()
-
-# --- 3. 工具函数 ---
-def compress_img(uploaded_file):
-    img = Image.open(uploaded_file)
-    img.thumbnail((300, 300))
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=70)
-    return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
-
-# --- 4. UI 界面 ---
-st.title("🗼 东京生活成本 AI 计算器 (GitHub 同步版)")
-
+# 侧边栏参数 (天数、生活费等)
 with st.sidebar:
-    st.header("⚙️ 设置")
-    dest_school = st.text_input("🏫 学校地址", value="东京都新宿区百人町2-24-12")
-    dest_juku = st.text_input("🎨 私塾地址", value="东京都荒川区西日暮里2-12-5")
+    st.header("⚙️ 生活参数")
     base_living = st.number_input("🍔 月固定生活费", value=60000)
-    days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
-    days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
+    days_school = st.slider("🏫 学校通勤天数", 1, 7, 5)
+    days_juku = st.slider("🎨 私塾通勤天数", 0.0, 7.0, 0.5, step=0.5)
+    dest_school = st.text_input("📍 学校位置", value="东京都新宿区百人町2-24-12")
+    dest_juku = st.text_input("📍 私塾位置", value="东京都荒川区西日暮里2-12-5")
 
-# B. 录入区
-with st.expander("➕ 录入新房源", expanded=True):
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        n_col, l_col, r_col = st.columns(3)
-        name_in = n_col.text_input("🏠 房源名称")
-        loc_in = l_col.text_input("📍 车站名")
-        rent_in = r_col.number_input("💰 预估月租", value=80000)
-    with c2:
-        uploaded_file = st.file_uploader("🖼️ 房源照片", type=['jpg','jpeg','png'])
-
-    if st.button("🚀 AI 计算并同步至 GitHub", use_container_width=True):
-        if loc_in:
-            # 此处省略 get_transit 调用逻辑，与之前一致
-            # 计算完成后更新数据并保存
-            # storage.save_data(st.session_state.df_houses)
-            st.rerun()
-
-# C. 房源清单
+# C. 房源数据清单
 st.subheader("📝 房源数据清单")
-edited_df = st.data_editor(st.session_state.df_houses, num_rows="dynamic", use_container_width=True, key="main_editor")
+# 允许动态删除行，删除后会自动触发 storage.save_data()
+edited_df = st.data_editor(st.session_state.df_houses, num_rows="dynamic", use_container_width=True)
 
 if not edited_df.equals(st.session_state.df_houses):
     st.session_state.df_houses = edited_df
-    storage.save_data(edited_df) # 实时同步修改到 GitHub
-    st.toast("✅ 数据已同步至 GitHub")
+    storage.save_data(edited_df)
+    st.toast("☁️ 数据已同步至 GitHub 仓库")
 
-# D. 房源对比报告 (修复语法错误 )
+# D. 房源对比报告 (优化打印分页，防止 PDF 缺页)
 if not st.session_state.df_houses.empty:
     st.divider()
-    st.subheader("📊 房源对比分析报告")
+    st.subheader("📊 房源开销对比分析报告")
+    
+    # 强制在打印时显示卡片边框
+    st.markdown("""
+        <style>
+        @media print {
+            .stContainer { border: 1px solid #ddd !important; break-inside: avoid; margin-bottom: 20px; }
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     for idx, row in st.session_state.df_houses.iterrows():
         try:
-            # 计算开销...
+            # 计算开销逻辑
+            commute_m = (float(row["学费(单程)"]) * 2 * days_school + float(row["塾费(单程)"]) * 2 * days_juku) * 4.33
+            total_m = float(row["月房租(円)"]) + float(row["管理费(円)"]) + commute_m + base_living
+            
             with st.container(border=True):
-                # 渲染卡片逻辑，包含地图跳转按钮 
-                pass
+                i_col, t_col, b_col = st.columns([1.5, 3, 1])
+                with i_col:
+                    if row["房源图片"]: st.image(row["房源图片"], use_container_width=True)
+                with t_col:
+                    st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
+                    st.write(f"📉 **预估月总支出: {int(total_m):,} 円**")
+                    st.write(f"🏠 房租+管理: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 月通勤: {int(commute_m):,}")
+                with b_col:
+                    m_api = "https://www.google.com/maps/dir/?api=1"
+                    s_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
+                    st.link_button("🏫 学校地图", s_url, use_container_width=True)
+                    # 添加卡片删除按钮
+                    if st.button("🗑️ 删除", key=f"btn_del_{idx}"):
+                        st.session_state.df_houses = st.session_state.df_houses.drop(idx).reset_index(drop=True)
+                        storage.save_data(st.session_state.df_houses)
+                        st.rerun()
         except:
             continue
+
+if st.button("🚨 清空所有数据"):
+    st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
+    storage.save_data(st.session_state.df_houses)
+    st.rerun()
