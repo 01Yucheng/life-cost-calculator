@@ -361,10 +361,13 @@ if run_btn:
             st.error("请填写出发（住处地址/车站名）。")
             st.stop()
 
-        ts = normalize_departure_ts_jst(depart_date, depart_time)
-        ts, adjusted = ensure_future_ts(ts)
-        if adjusted:
-            st.warning("你选择的出发时间已经过去，系统已自动改为：当前时间 + 10 分钟（JST）。")
+       # ✅ 强制固定公共交通可用时间：明天 09:00（JST）
+        tomorrow = (dt.datetime.now(tz=JST) + dt.timedelta(days=1)).date()
+        fixed_time = dt.time(9, 0)
+        ts = normalize_departure_ts_jst(tomorrow, fixed_time)
+        adjusted = True
+        st.info("为保证公共交通有结果，已强制使用：明天 09:00（JST）进行查询（仅用于估算）。")
+
 
         # Geocode
         o_lat, o_lng, o_fmt = geocode(enrich_jp_query(origin), api_key)
@@ -514,3 +517,4 @@ st.dataframe(df_show, use_container_width=True, hide_index=True)
 st.subheader("导出")
 csv = df_sorted.to_csv(index=False).encode("utf-8-sig")
 st.download_button("下载 CSV 结果", data=csv, file_name="生活成本对比.csv", mime="text/csv")
+
