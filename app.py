@@ -166,7 +166,7 @@ edited_df = st.data_editor(
 )
 st.session_state.df_houses = edited_df
 
-# D. 房源开销对比分析报告
+# --- D. 房源开销对比分析报告 ---
 if not edited_df.empty:
     st.divider()
     st.subheader("📊 房源开销对比分析报告")
@@ -214,7 +214,8 @@ if not edited_df.empty:
                     st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
                     st.write(f"💰 **预估月总支出: {int(total_m):,} 円**")
                     st.write(f"🏠 房租+管理: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 最佳月通勤: {int(best_s_commute + best_j_commute):,}")
-                    st.caption(f"线路概要: {row['线路概要']} | 建议：学校-{s_advice} / 私塾-{j_advice}")
+                    # 此处已将“线路概要”替换为“单程耗时”
+                    st.caption(f"⏱️ 单程耗时: 学校 {row['学时(分)']}分 / 私塾 {row['塾时(分)']}分 | 建议：学校-{s_advice} / 私塾-{j_advice}")
                 
                 with btn_c:
                     st.link_button(f"🏫 学校地图", get_google_maps_url(row['房源位置'], dest_school), use_container_width=True)
@@ -225,3 +226,4 @@ if not edited_df.empty:
     if st.button("🗑️ 清空所有数据"):
         st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
         st.rerun()
+
