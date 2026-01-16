@@ -63,55 +63,67 @@ def process_and_compress_img(uploaded_file):
 
 def get_ai_commute(loc, s_dest, j_dest):
     """
-    通过强化提示词，让 AI 模拟 Google Maps 实时计算逻辑
+    强化版 AI 交通分析函数：支持实时数据回显与格式容错
     """
-    # 引导 AI 模拟 Google Maps 的思考过程
+    # 1. 构造强约束提示词
     prompt = f"""
-    你现在是集成 Google Maps 数据的交通机器人。请分析以下日本通勤任务：
+    你现在是 Google Maps 交通数据机器人。请分析日本通勤路线并严格返回 JSON。
     
-    1. 起点车站: {loc} (请视为门到门出发点)
-    2. 学校终点: {s_dest}
-    3. 私塾终点: {j_dest}
+    起点: {loc}
+    终点1 (学校): {s_dest}
+    终点2 (私塾): {j_dest}
     
-    任务指令:
-    - 检索 2024-2026 年日本铁道（JR、东京地下铁）的标准耗时。
-    - 必须包含从房源步行至 {loc} 的时间（默认 5-8 分钟）。
-    - 必须包含标准成人票价（IC卡价格）。
-    
-    请严格按照 JSON 格式输出，不要输出任何推理过程：
+    要求：
+    - 检索 2024-2026 年真实铁道数据。
+    - 包含步行至车站的时间。
+    - 必须返回以下格式的 JSON，禁止任何解释文字：
     {{
-        "s_yen": 整数,
-        "j_yen": 整数,
-        "s_mins": 整数,
-        "j_mins": 整数
+        "s_yen": 整数票价,
+        "j_yen": 整数票价,
+        "s_mins": 整数分钟,
+        "j_mins": 整数分钟
     }}
     """
     
     try:
-        # 确保 loc 不是空的占位符
+        # 安全检查：防止空输入
         if not loc or "车站名" in loc:
+            st.warning("⚠️ 请先输入车站名再进行分析")
             return {"s_yen": 0, "j_yen": 0, "s_mins": 0, "j_mins": 0}
-            
+
+        # 2. 调用 Gemini API
         res = model.generate_content(prompt)
+        raw_text = res.text
         
-        # 更加健壮的 JSON 提取逻辑，防止 AI 返回 Markdown 代码块
-        json_text = res.text
-        if "```json" in json_text:
-            json_text = json_text.split("```json")[1].split("```")[0]
-        elif "```" in json_text:
-            json_text = json_text.split("```")[1].split("```")[0]
+        # 3. 实时回显 AI 返回的原始数据（调试关键！）
+        with st.expander("🔍 AI 返回原始数据调试", expanded=False):
+            st.code(raw_text, language="text")
+            st.caption("如果上方显示非 JSON 文本，说明 AI 受到干扰或地址无法识别")
+
+        # 4. 灵活提取 JSON 核心内容
+        # 使用正则匹配最外层的花括号，防止 AI 返回 Markdown 代码块标签
+        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+        if not json_match:
+            st.error(f"❌ AI 未返回有效的 JSON 结构。原始输出：{raw_text}")
+            raise ValueError("No JSON found")
             
-        data = json.loads(re.search(r'\{.*\}', json_text, re.DOTALL).group())
+        data = json.loads(json_match.group())
         
-        # 验证结果逻辑（防止 AI 乱报 99 分）
-        if data.get("s_mins", 0) > 180: # 如果单程超过3小时，通常是 AI 胡说
-             raise ValueError("数据异常")
-             
-        return data
-        
+        # 5. 验证解析结果
+        required_keys = ["s_yen", "j_yen", "s_mins", "j_mins"]
+        if all(key in data for key in required_keys):
+            # 弹窗提示解析成功
+            st.toast(f"✅ 交通分析成功: {loc} -> {data['s_mins']}分/{data['j_mins']}分", icon="🚇")
+            return data
+        else:
+            st.error(f"❌ AI 返回字段缺失: {data}")
+            raise ValueError("Incomplete data")
+
     except Exception as e:
-        # 如果解析失败，尝试根据常识返回一个合理值而非 99
-        return {"s_yen": 200, "j_yen": 300, "s_mins": 25, "j_mins": 20}
+        # 6. 异常情况下的可视化反馈
+        st.error(f"🚨 交通计算出错: {str(e)}")
+        # 返回 99 分以便在界面上明显识别出错误数据
+        return {"s_yen": 111, "j_yen": 111, "s_mins": 99, "j_mins": 99}
 
 # --- 5. UI: 侧边栏与录入 ---
 with st.sidebar:
@@ -192,5 +204,6 @@ if not st.session_state.df_houses.empty:
                         storage.save_data(st.session_state.df_houses)
                         st.rerun()
         except: continue
+
 
 
