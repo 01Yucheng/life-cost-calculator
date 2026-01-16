@@ -13,13 +13,15 @@ from PIL import Image
 st.set_page_config(page_title="东京生活成本 AI 计算器 Pro", layout="wide", page_icon="🗼")
 
 @st.cache_resource
+@st.cache_resource
 def init_ai():
     if "GEMINI_API_KEY" not in st.secrets:
-        st.error("🔑 未在 Secrets 中找到 GEMINI_API_KEY")
+        st.error("🔑 缺失 API KEY")
         st.stop()
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # 必须使用 flash 1.5 以支持图片识别
-    return genai.GenerativeModel("models/gemini-1.5-flash")
+    
+    # 修复 404 错误：改用更通用的模型调用字符串
+    return genai.GenerativeModel("gemini-1.5-flash"
 
 model = init_ai()
 
@@ -149,3 +151,4 @@ if not edited_df.empty:
                 st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
                 st.write(f"📈 **实际月均总支出: {int(item['total']):,}(円)**")
                 st.write(f"🏠 固定月开销: {int(item['base']):,} | 🔑 初期分摊: +{int(item['amort']):,}/月")
+
