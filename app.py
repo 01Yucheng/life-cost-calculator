@@ -19,7 +19,7 @@ def init_ai():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     try:
         # 修改为 Gemini 3 模型
-        target = "models/gemini-3-flash"
+        target = "models/gemini-3"
         return genai.GenerativeModel(target)
     except Exception as e:
         st.error(f"AI 初始化失败 (请确认您的 API 权限是否支持 Gemini 3): {e}")
@@ -42,11 +42,11 @@ def load_data_from_github():
         file_content = repo.get_contents("house_data.csv")
         return pd.read_csv(BytesIO(file_content.decoded_content))
     except Exception:
-        # 已加入初期开支字段
+        # 新增列：头金、礼金、押金
         return pd.DataFrame(columns=[
             "房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", 
-            "敷金(円)", "礼金(円)", "中介费(円)", "其它初期费(円)",
-            "学时(分)", "学费(单程)", "学定期(月)", "塾时(分)", "塾费(单程)", "塾定期(月)", "线路概要"
+            "头金(初期)", "礼金押金", "学时(分)", "学费(单程)", "学定期(月)", 
+            "塾时(分)", "塾费(单程)", "塾定期(月)", "线路概要"
         ])
 
 def save_data_to_github(df):
@@ -121,11 +121,10 @@ with st.expander("➕ 录入新房源", expanded=True):
         name_in = n_col.text_input("🏠 房源名称")
         loc_in = l_col.text_input("📍 最近车站")
         rent_in = r_col.number_input("💰 预估月租", value=80000)
-        # 初期费输入
-        c_ini1, c_ini2, c_ini3 = st.columns(3)
-        shiki_in = c_ini1.number_input("敷金(円)", value=0, step=1000)
-        rei_in = c_ini2.number_input("礼金(円)", value=0, step=1000)
-        agency_in = c_ini3.number_input("中介费(円)", value=rent_in, step=1000)
+        # 新增初期费用输入
+        i_col1, i_col2 = st.columns(2)
+        initial_pay_in = i_col1.number_input("🔑 头金(概算)", value=0, help="指所有初期费用总和")
+        rei_shiki_in = i_col2.text_input("💴 礼金押金(描述)", placeholder="例如：礼1押1")
     with c2:
         uploaded_file = st.file_uploader("🖼️ 房源照片", type=['png', 'jpg', 'jpeg'])
 
@@ -143,10 +142,8 @@ with st.expander("➕ 录入新房源", expanded=True):
                         "房源图片": img_data,
                         "月房租(円)": rent_in,
                         "管理费(円)": 5000,
-                        "敷金(円)": shiki_in,
-                        "礼金(円)": rei_in,
-                        "中介费(円)": agency_in,
-                        "其它初期费(円)": 20000, # 预估火灾保险等
+                        "头金(初期)": initial_pay_in,
+                        "礼金押金": rei_shiki_in,
                         "学时(分)": s_data['mins'],
                         "学费(单程)": s_data['yen'],
                         "学定期(月)": s_data.get('pass_month', s_data['yen'] * 18),
@@ -186,8 +183,6 @@ if not edited_df.empty:
             best_j = min(j_ride, j_pass) if use_pass_option else j_ride
             
             total = float(row["月房租(円)"]) + float(row["管理费(円)"]) + best_s + best_j + base_living
-            # 初期开支统计
-            initial_total = float(row["敷金(円)"]) + float(row["礼金(円)"]) + float(row["中介费(円)"]) + float(row["其它初期费(円)"])
             
             with st.container(border=True):
                 img_c, info_c, btn_c = st.columns([1.5, 3, 1])
@@ -195,7 +190,9 @@ if not edited_df.empty:
                     if row["房源图片"]: st.image(row["房源图片"], use_container_width=True)
                 with info_c:
                     st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
-                    st.write(f"💰 **预估月总支出: {int(total):,} 円** | 🔑 **初期预估: {int(initial_total):,} 円**")
+                    st.write(f"💰 **预估月总支出: {int(total):,} 円**")
+                    # 在展示中加入初期费用信息
+                    st.write(f"🏠 房租+管理: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🔑 初期费用: {row['头金(初期)']} ({row['礼金押金']})")
                     st.caption(f"⏱️ 单程耗时: 学校 {row['学时(分)']}分 / 私塾 {row['塾时(分)']}分 | 建议：{'购买定期券' if use_pass_option and (best_s < s_ride or best_j < j_ride) else '单次刷卡'}")
                 with btn_c:
                     st.link_button(f"🏫 学校地图", get_google_maps_url(row['房源位置'], dest_school), use_container_width=True)
