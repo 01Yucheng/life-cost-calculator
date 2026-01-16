@@ -1,6 +1,5 @@
-PyGithub
+streamlit
 pandas
 google-generativeai
-Pillow
-
+PyGithub
 
