@@ -1,15 +1,23 @@
+# app.py
+# Streamlit App: 生活成本计算器（租金 + 通勤成本 + 通勤时间）
+# ✅ 强制公共交通（TRANSIT）
+# ✅ 双目的地 A/B 按频率加权
+# ✅ 一键跳转 Google Maps 公交导航
+# ✅ 使用 Routes API v2（computeRoutes）并且用 placeId（更稳定，避免 latLng 导致 ZERO_RESULTS）
+# ✅ 失败时自动用“下一个工作日 09:30（JST）”重试（仍然 TRANSIT，不降级 driving）
+
 import datetime as dt
-from dataclasses import dataclass
-from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
+from urllib.parse import quote_plus
 
 import pandas as pd
 import requests
 import streamlit as st
 
-# ============================================================
+
+# =========================
 # App Config
-# ============================================================
+# =========================
 st.set_page_config(page_title="生活成本计算器", layout="wide")
 st.title("生活成本计算器（租金 + 通勤成本 + 通勤时间）")
 st.caption(
@@ -20,22 +28,9 @@ JST = ZoneInfo("Asia/Tokyo")
 WEEKS_PER_MONTH = 4.33
 
 
-# ============================================================
-# Small Models
-# ============================================================
-@dataclass(frozen=True)
-class TransitResult:
-    ok: bool
-    minutes: int | None
-    fare_jpy: float | None
-    summary: str
-    raw: dict
-    used_mode: str  # "placeid_departure" / "placeid_arrival"
-
-
-# ============================================================
+# =========================
 # Helpers
-# ============================================================
+# =========================
 def money(v: float) -> str:
     return f"¥{v:,.0f}"
 
@@ -53,8 +48,22 @@ def maps_transit_link(origin_text: str, dest_text: str) -> str:
     return f"https://www.google.com/maps/dir/?api=1&origin={o}&destination={d}&travelmode=transit"
 
 
+def enrich_jp_query(text: str) -> str:
+    """
+    提高站名/地址解析稳定性：补上“東京都 日本”（不改变用户原始输入展示）。
+    """
+    s = (text or "").strip()
+    if not s:
+        return s
+    if ("日本" not in s) and ("Tokyo" not in s) and ("東京都" not in s):
+        s += " 東京都 日本"
+    return s
+
+
 def normalize_departure_ts_jst(date_: dt.date, time_: dt.time) -> int:
-    """生成 JST 时间戳，并做 5 分钟取整（提高缓存命中）。"""
+    """
+    生成 JST 时间戳，并做 5 分钟取整（提高缓存命中）。
+    """
     depart_dt = dt.datetime.combine(date_, time_).replace(tzinfo=JST)
     minute = (depart_dt.minute // 5) * 5
     depart_dt = depart_dt.replace(minute=minute, second=0, microsecond=0)
@@ -62,46 +71,76 @@ def normalize_departure_ts_jst(date_: dt.date, time_: dt.time) -> int:
 
 
 def ensure_future_ts(ts: int) -> tuple[int, bool]:
-    """如果用户选择的时间在过去：自动推到 now+10min（JST）。"""
+    """
+    如果用户选择的时间在过去：自动推到 now+10min（JST）。
+    返回 (new_ts, adjusted_flag)
+    """
     now = int(dt.datetime.now(tz=JST).timestamp())
     if ts <= now:
         return now + 10 * 60, True
     return ts, False
 
 
-def enrich_jp_query(text: str) -> str:
-    """提高站名/地址解析稳定性：补上“東京都 日本”（不改变用户原始输入展示）。"""
-    s = text.strip()
-    if ("日本" not in s) and ("Tokyo" not in s) and ("東京都" not in s):
-        s += " 東京都 日本"
-    return s
+def next_weekday_at(hour: int = 9, minute: int = 30) -> dt.datetime:
+    """
+    返回 “下一个工作日 HH:MM（JST）” 的 datetime。
+    用于公共交通查询失败时的兜底查询时间（更容易有班次）。
+    """
+    now = dt.datetime.now(tz=JST)
+    d = now.date()
+    # 从明天开始找工作日
+    d = d + dt.timedelta(days=1)
+    while d.weekday() >= 5:  # 5=Sat, 6=Sun
+        d = d + dt.timedelta(days=1)
+    return dt.datetime(d.year, d.month, d.day, hour, minute, tzinfo=JST)
 
 
 def extract_error_message(payload: dict) -> str:
-    """Directions/Geocode 失败时的 error_message。"""
+    """
+    Routes API 失败时一般是 {error:{message:...}}；兼容旧字段 error_message。
+    """
     if not isinstance(payload, dict):
         return ""
-    msg = payload.get("error_message")
-    return msg if isinstance(msg, str) else ""
+    e = payload.get("error")
+    if isinstance(e, dict):
+        msg = e.get("message")
+        if isinstance(msg, str):
+            return msg
+    msg2 = payload.get("error_message")
+    return msg2 if isinstance(msg2, str) else ""
 
 
-# ============================================================
-# Google APIs (Geocoding -> place_id)
-# ============================================================
+def safe_json(resp: requests.Response) -> dict:
+    try:
+        v = resp.json()
+        return v if isinstance(v, dict) else {"_non_dict_json": str(v)}
+    except Exception:
+        return {"_json_parse_failed": True, "_raw_text": (resp.text or "")[:2000]}
+
+
+# =========================
+# Google APIs
+# =========================
 @st.cache_data(ttl=60 * 60 * 24 * 7)
-def geocode_place(query: str, api_key: str) -> tuple[str, str]:
+def geocode_place_id(query: str, api_key: str) -> tuple[str, str]:
     """
     Geocoding API: query -> (place_id, formatted_address)
     """
     url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": query, "region": "jp", "language": "ja", "key": api_key}
+    params = {
+        "address": query,
+        "region": "jp",
+        "language": "ja",
+        "key": api_key,
+    }
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
     data = r.json()
 
     status = data.get("status")
     if status != "OK":
-        raise RuntimeError(f"Geocoding API 返回 {status}. {data.get('error_message','')}".strip())
+        msg = data.get("error_message", "")
+        raise RuntimeError(f"Geocoding API 返回 {status}. {msg}".strip())
 
     result = data["results"][0]
     place_id = result["place_id"]
@@ -109,95 +148,149 @@ def geocode_place(query: str, api_key: str) -> tuple[str, str]:
     return place_id, formatted
 
 
-# ============================================================
-# Google Directions API (Transit Only, place_id)
-# ============================================================
 @st.cache_data(ttl=60 * 60 * 12)
-def directions_transit_placeid(
+def routes_compute_transit_placeid(
     origin_place_id: str,
     dest_place_id: str,
     ts: int,
     api_key: str,
     time_mode: str,  # "departure" or "arrival"
+    include_debug: bool = True,
 ) -> dict:
     """
-    Directions API: transit only, using place_id (more stable than lat/lng for TRANSIT).
+    Routes API v2: computeRoutes (TRANSIT).
+    ✅ 用 placeId（比 latLng 更稳定，解决你遇到的 ZERO_RESULTS）
     """
-    url = "https://maps.googleapis.com/maps/api/directions/json"
-    params = {
-        "origin": f"place_id:{origin_place_id}",
-        "destination": f"place_id:{dest_place_id}",
-        "mode": "transit",
-        "language": "ja",
-        "region": "jp",
-        "alternatives": "true",
-        "key": api_key,
+    url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+
+    field_mask = ",".join(
+        [
+            "routes.duration",
+            "routes.legs.duration",
+            "routes.travelAdvisory.transitFare",
+            "routes.description",
+            "routes.polyline.encodedPolyline",  # 可选：后面想画路线图用
+            "geocodingResults.origin",
+            "geocodingResults.destination",
+        ]
+    )
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": field_mask,
     }
+
+    body = {
+        "origin": {"placeId": origin_place_id},
+        "destination": {"placeId": dest_place_id},
+        "travelMode": "TRANSIT",
+        "languageCode": "ja",
+        "regionCode": "JP",
+        "computeAlternativeRoutes": True,
+    }
+
+    when = dt.datetime.fromtimestamp(ts, tz=JST).isoformat()
     if time_mode == "arrival":
-        params["arrival_time"] = ts
+        body["arrivalTime"] = when
     else:
-        params["departure_time"] = ts
+        body["departureTime"] = when
 
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    return r.json()
+    r = requests.post(url, headers=headers, json=body, timeout=20)
+    data = safe_json(r)
+
+    if include_debug:
+        data["_http_status"] = r.status_code
+        data["_sent_body"] = body
+        data["_sent_field_mask"] = field_mask
+        if "_raw_text" not in data:
+            data["_raw_text"] = (r.text or "")[:2000]
+
+    return data
 
 
-def parse_directions_route(data: dict) -> tuple[int, float | None, str]:
+def parse_route(data: dict) -> tuple[int, float | None, str]:
     """
-    Directions API data.status == OK 时解析：
-    - minutes
-    - fare_jpy(可能None)
-    - summary
+    Routes API data 解析：
+    - minutes：routes[0].duration（如 "1234s"）
+    - fare_jpy：routes[0].travelAdvisory.transitFare（可能为空）
+    - summary：routes[0].description（可能为空）
     """
-    route = data["routes"][0]
-    leg = route["legs"][0]
-    minutes = round(leg["duration"]["value"] / 60)
+    routes = data.get("routes") or []
+    if not routes:
+        raise RuntimeError(f"Routes API 未返回 routes。status={data.get('status')}")
+
+    r0 = routes[0]
+
+    dur = r0.get("duration", "0s")
+    seconds = int(dur[:-1]) if isinstance(dur, str) and dur.endswith("s") else 0
+    minutes = max(0, round(seconds / 60))
 
     fare_jpy = None
-    fare = route.get("fare")
-    if isinstance(fare, dict) and fare.get("currency") == "JPY" and "value" in fare:
-        fare_jpy = float(fare["value"])
+    adv = r0.get("travelAdvisory") or {}
+    tf = adv.get("transitFare")
+    if isinstance(tf, dict) and tf.get("currencyCode") == "JPY":
+        units = float(tf.get("units", 0) or 0)
+        nanos = float(tf.get("nanos", 0) or 0)
+        fare_jpy = units + nanos / 1e9
 
-    summary = route.get("summary", "")
+    summary = r0.get("description", "") or ""
     return minutes, fare_jpy, summary
 
 
-def transit_route_with_retry_placeid(
+def transit_route_with_retry(
     origin_place_id: str,
     dest_place_id: str,
     ts: int,
     api_key: str,
 ) -> tuple[bool, dict, str]:
     """
-    强制公共交通：先 departure_time 再 arrival_time 重试（仍然 transit）。
+    强制公共交通：
+    1) departureTime
+    2) 如果没有 routes -> arrivalTime 重试（仍然 TRANSIT）
     """
-    d1 = directions_transit_placeid(origin_place_id, dest_place_id, ts, api_key, "departure")
-    s1 = d1.get("status")
-    if s1 == "OK":
-        return True, d1, "placeid_departure"
+    data = routes_compute_transit_placeid(origin_place_id, dest_place_id, ts, api_key, "departure")
+    if (data.get("routes") or []):
+        return True, data, "transit_departure"
 
-    if s1 == "ZERO_RESULTS":
-        d2 = directions_transit_placeid(origin_place_id, dest_place_id, ts, api_key, "arrival")
-        if d2.get("status") == "OK":
-            return True, d2, "placeid_arrival"
-        return False, d2, "placeid_arrival"
+    data2 = routes_compute_transit_placeid(origin_place_id, dest_place_id, ts, api_key, "arrival")
+    if (data2.get("routes") or []):
+        return True, data2, "transit_arrival"
 
-    return False, d1, "placeid_departure"
+    # 统一 status（Routes API 有时没给 status）
+    if "status" not in data2:
+        data2["status"] = "NO_ROUTES"
+    return False, data2, "transit_arrival"
 
 
-# ============================================================
-# Weighted Merge
-# ============================================================
+def transit_route_with_fallback_time(
+    origin_place_id: str,
+    dest_place_id: str,
+    ts: int,
+    api_key: str,
+) -> tuple[bool, dict, str, int, bool]:
+    """
+    在 transit_route_with_retry 失败时，用“下一个工作日 09:30（JST）”再试一次。
+    返回：(ok, data, mode_str, used_ts, used_fallback_time_flag)
+    """
+    ok, data, mode = transit_route_with_retry(origin_place_id, dest_place_id, ts, api_key)
+    if ok:
+        return ok, data, mode, ts, False
+
+    # fallback 时间：下一个工作日 09:30（JST）
+    fb_dt = next_weekday_at(9, 30)
+    fb_ts = int(fb_dt.timestamp())
+
+    ok2, data2, mode2 = transit_route_with_retry(origin_place_id, dest_place_id, fb_ts, api_key)
+    if ok2:
+        return ok2, data2, f"{mode2}_fallback_0930", fb_ts, True
+
+    return False, data2, f"{mode2}_fallback_0930", fb_ts, True
+
+
 def weighted_merge(
-    a_ok: bool,
-    a_minutes: int | None,
-    a_fare: float | None,
-    a_w: float,
-    b_ok: bool,
-    b_minutes: int | None,
-    b_fare: float | None,
-    b_w: float,
+    a_ok: bool, a_minutes: int | None, a_fare: float | None, a_w: float,
+    b_ok: bool, b_minutes: int | None, b_fare: float | None, b_w: float,
 ) -> tuple[float, float | None]:
     """
     返回：加权平均单程 minutes、加权平均单程 fare（若至少一条有fare才给）
@@ -230,9 +323,9 @@ def weighted_merge(
     return avg_minutes, avg_fare
 
 
-# ============================================================
+# =========================
 # Sidebar
-# ============================================================
+# =========================
 with st.sidebar:
     st.header("设置")
     use_time_value = st.toggle("把通勤时间折算为成本（时间价值）", value=True)
@@ -240,33 +333,31 @@ with st.sidebar:
     if use_time_value:
         time_value = st.number_input("你的时间价值（日元/小时）", min_value=0, value=1500, step=100)
 
-    debug = st.toggle("显示调试信息", value=False)
+    debug = st.toggle("显示调试信息（开发用）", value=False)
 
 
-# ============================================================
+# =========================
 # Listing Table
-# ============================================================
+# =========================
 st.subheader("房源表格（可添加多行对比）")
 
 if "listings" not in st.session_state:
     st.session_state.listings = pd.DataFrame(
-        [
-            {
-                "房源名称": "例：浅草 1K",
-                "房租(月/日元)": 110000,
-                "管理费(月/日元)": 8000,
-                "水电网(月/日元)": 12000,
-                "手机(月/日元)": 3000,
-                "餐饮买菜(月/日元)": 40000,
-                "其他(月/日元)": 5000,
-                # 写回字段（加权平均单程）
-                "加权单程通勤时间(分钟)": 0,
-                "加权单程通勤费用(日元)": 0,
-                # 频率
-                "A每周次数": 1.0,
-                "B每周次数": 0.5,
-            }
-        ]
+        [{
+            "房源名称": "例：浅草 1K",
+            "房租(月/日元)": 110000,
+            "管理费(月/日元)": 8000,
+            "水电网(月/日元)": 12000,
+            "手机(月/日元)": 3000,
+            "餐饮买菜(月/日元)": 40000,
+            "其他(月/日元)": 5000,
+            # 写回字段（加权平均单程）
+            "加权单程通勤时间(分钟)": 0,
+            "加权单程通勤费用(日元)": 0,
+            # 频率信息
+            "A每周次数": 1.0,
+            "B每周次数": 0.5,
+        }]
     )
 
 st.session_state.listings = st.data_editor(
@@ -277,9 +368,9 @@ st.session_state.listings = st.data_editor(
 )
 
 
-# ============================================================
+# =========================
 # Commute Section (TRANSIT only, 2 destinations)
-# ============================================================
+# =========================
 st.divider()
 st.subheader("通勤自动计算（强制公共交通 + 双目的地加权）")
 
@@ -334,69 +425,75 @@ st.caption(
 
 if run_btn:
     try:
-        if not origin.strip():
+        if not (origin or "").strip():
             st.error("请填写出发（住处地址/车站名）。")
             st.stop()
 
-        # time -> unix ts (JST)
+        # 用户选择时间 -> ts
         ts = normalize_departure_ts_jst(depart_date, depart_time)
         ts, adjusted = ensure_future_ts(ts)
         if adjusted:
             st.warning("你选择的出发时间已经过去，系统已自动改为：当前时间 + 10 分钟（JST）。")
 
-        # ---- Geocode to place_id (key fix) ----
-        o_pid, o_fmt = geocode_place(enrich_jp_query(origin), api_key)
-        a_pid, a_fmt = geocode_place(enrich_jp_query(destA), api_key)
-        b_pid, b_fmt = geocode_place(enrich_jp_query(destB), api_key)
+        # Geocode -> placeId（关键：后续 Routes API 用 placeId，避免 transit ZERO_RESULTS）
+        o_pid, o_fmt = geocode_place_id(enrich_jp_query(origin), api_key)
+        a_pid, a_fmt = geocode_place_id(enrich_jp_query(destA), api_key)
+        b_pid, b_fmt = geocode_place_id(enrich_jp_query(destB), api_key)
 
-        # ---- Transit A/B with retry (departure -> arrival) ----
-        okA, rawA, modeA = transit_route_with_retry_placeid(o_pid, a_pid, ts, api_key)
-        okB, rawB, modeB = transit_route_with_retry_placeid(o_pid, b_pid, ts, api_key)
+        # Transit A/B with fallback time
+        okA, dataA, modeA, used_ts_A, used_fb_A = transit_route_with_fallback_time(o_pid, a_pid, ts, api_key)
+        okB, dataB, modeB, used_ts_B, used_fb_B = transit_route_with_fallback_time(o_pid, b_pid, ts, api_key)
 
-        # show errors but ALWAYS provide Maps links
+        # 提示是否用了 fallback 时间（仍然是 TRANSIT）
+        if used_fb_A or used_fb_B:
+            fb_dt = dt.datetime.fromtimestamp(max(used_ts_A, used_ts_B), tz=JST)
+            st.info(f"为提高公共交通命中率，已额外使用：{fb_dt.strftime('%Y-%m-%d %H:%M')}（JST）进行查询（仍为公共交通）。")
+
+        # Failure blocks (still provide Maps links)
         if not okA:
-            st.error(f"A 公共交通查询失败：{rawA.get('status')}. {extract_error_message(rawA)}".strip())
+            st.error(f"A 公共交通查询失败：{dataA.get('status','NO_ROUTES')}. {extract_error_message(dataA)}".strip())
             st.link_button("打开 Google Maps：A 公共交通导航", mapsA)
             if debug:
                 st.subheader("Debug: A 返回原始数据")
-                st.json(rawA)
+                st.json(dataA)
 
         if not okB:
-            st.error(f"B 公共交通查询失败：{rawB.get('status')}. {extract_error_message(rawB)}".strip())
+            st.error(f"B 公共交通查询失败：{dataB.get('status','NO_ROUTES')}. {extract_error_message(dataB)}".strip())
             st.link_button("打开 Google Maps：B 公共交通导航", mapsB)
             if debug:
                 st.subheader("Debug: B 返回原始数据")
-                st.json(rawB)
+                st.json(dataB)
 
         if not (okA or okB):
             st.stop()
 
+        # Parse OK routes
         a_minutes = a_fare = a_summary = None
         b_minutes = b_fare = b_summary = None
 
         if okA:
-            a_minutes, a_fare, a_summary = parse_directions_route(rawA)
+            a_minutes, a_fare, a_summary = parse_route(dataA)
             st.success(f"✅ A 单程公共交通：{a_minutes} 分钟（{modeA}）")
             if a_fare is not None:
                 st.info(f"✅ A 单程票价：{money(a_fare)}")
             else:
                 st.warning("A：API 未返回票价（常见情况），可点击 Google Maps 查看票价。")
             if a_summary:
-                st.caption(f"A 路线摘要：{a_summary}")
+                st.caption(f"A 路线：{a_summary}")
             st.link_button("在 Google Maps 打开 A 公共交通导航", mapsA)
 
         if okB:
-            b_minutes, b_fare, b_summary = parse_directions_route(rawB)
+            b_minutes, b_fare, b_summary = parse_route(dataB)
             st.success(f"✅ B 单程公共交通：{b_minutes} 分钟（{modeB}）")
             if b_fare is not None:
                 st.info(f"✅ B 单程票价：{money(b_fare)}")
             else:
                 st.warning("B：API 未返回票价（常见情况），可点击 Google Maps 查看票价。")
             if b_summary:
-                st.caption(f"B 路线摘要：{b_summary}")
+                st.caption(f"B 路线：{b_summary}")
             st.link_button("在 Google Maps 打开 B 公共交通导航", mapsB)
 
-        # ---- Weighted write-back (one-way average) ----
+        # Weighted merge (write back as weighted avg one-way)
         avg_minutes, avg_fare = weighted_merge(
             okA, a_minutes, a_fare, monthly_oneway_A,
             okB, b_minutes, b_fare, monthly_oneway_B
@@ -417,7 +514,9 @@ if run_btn:
             st.write("出发解析：", o_fmt)
             st.write("A解析：", a_fmt)
             st.write("B解析：", b_fmt)
-            st.write("ts(JST)：", ts)
+            st.write("ts(用户) JST：", dt.datetime.fromtimestamp(ts, tz=JST).isoformat())
+            st.write("A used_ts JST：", dt.datetime.fromtimestamp(used_ts_A, tz=JST).isoformat())
+            st.write("B used_ts JST：", dt.datetime.fromtimestamp(used_ts_B, tz=JST).isoformat())
             st.write("A/B 每月单程次数：", monthly_oneway_A, monthly_oneway_B)
             st.write("加权平均单程分钟：", avg_minutes)
             st.write("加权平均单程票价：", avg_fare)
@@ -426,9 +525,9 @@ if run_btn:
         st.error(str(e))
 
 
-# ============================================================
+# =========================
 # Cost Comparison
-# ============================================================
+# =========================
 st.divider()
 st.subheader("结果对比（含通勤时间折算）")
 
@@ -443,14 +542,16 @@ def row_total_cost(row: pd.Series, time_value_yph: float | None):
         + float(row.get("其他(月/日元)", 0))
     )
 
+    # 通勤频率：每周 -> 每月单程次数
     a_w = float(row.get("A每周次数", 1.0)) * WEEKS_PER_MONTH
     b_w = float(row.get("B每周次数", 0.5)) * WEEKS_PER_MONTH
     monthly_oneway_total = a_w + b_w
 
+    # 这里使用“加权平均单程”回推月总通勤
     one_way_minutes = float(row.get("加权单程通勤时间(分钟)", 0))
     one_way_fare = float(row.get("加权单程通勤费用(日元)", 0))
 
-    # 月通勤总：单程次数 * 2（往返）
+    # 往返 *2
     monthly_commute_minutes = one_way_minutes * monthly_oneway_total * 2
     monthly_commute_cost = one_way_fare * monthly_oneway_total * 2
 
@@ -469,20 +570,17 @@ def row_total_cost(row: pd.Series, time_value_yph: float | None):
 rows = []
 for _, r in st.session_state.listings.iterrows():
     fixed, commute_cost, cash_total, commute_minutes, time_cost, total_with_time = row_total_cost(r, time_value)
-    rows.append(
-        {
-            "房源名称": r.get("房源名称", ""),
-            "固定支出/月": fixed,
-            "通勤费用/月": commute_cost,
-            "现金总成本/月": cash_total,
-            "通勤时间/月(小时)": commute_minutes / 60.0,
-            "时间折算成本/月": time_cost,
-            "综合成本/月(现金+时间)": total_with_time,
-        }
-    )
+    rows.append({
+        "房源名称": r.get("房源名称", ""),
+        "固定支出/月": fixed,
+        "通勤费用/月": commute_cost,
+        "现金总成本/月": cash_total,
+        "通勤时间/月(小时)": commute_minutes / 60.0,
+        "时间折算成本/月": time_cost,
+        "综合成本/月(现金+时间)": total_with_time,
+    })
 
 df = pd.DataFrame(rows)
-
 sort_col = "综合成本/月(现金+时间)" if time_value is not None else "现金总成本/月"
 df_sorted = df.sort_values(by=sort_col, ascending=True)
 
