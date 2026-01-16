@@ -1,4 +1,4 @@
-@@ -1,11 +1,11 @@
+
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
@@ -150,3 +150,4 @@ if not edited_df.empty:
         st.session_state.houses = []
         st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
         st.rerun()
+
