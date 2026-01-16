@@ -35,37 +35,39 @@ def get_transit(origin, destination):
     except: return None
 
 # --- 3. UI 界面 ---
-st.title("🗼 东京生活成本 AI 计算器")
+st.title("🗼 东京生活成本 AI 计算器 (图文增强版)")
 
-# A. 全局计算参数设置 (放置在侧边栏或顶部，方便修改)
+# A. 全局计算参数设置
 with st.sidebar:
     st.header("⚙️ 计算参数设置")
-    st.info("在此修改参数，下方报告的总支出将实时重算。")
     base_living = st.number_input("🍔 月固定生活费 (食费/杂费)", value=60000, step=5000)
     days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
     days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
-    st.caption("注：0.5 天/周 表示每两周去一次。")
+    st.caption("注：0.5 天/周 表示两周去一次。")
 
-# 初始化数据表
+# 初始化数据表 (新增：房源名称, 房源图片)
 if "df_houses" not in st.session_state:
     st.session_state.df_houses = pd.DataFrame(columns=[
-        "房源位置", "月房租(円)", "管理费(円)", "学时(分)", "学费(单程)", "塾时(分)", "塾费(单程)", "线路概要"
+        "房源名称", "房源位置", "房源图片URL", "月房租(円)", "管理费(円)", "学时(分)", "学费(单程)", "塾时(分)", "塾费(单程)", "线路概要"
     ])
 
 # B. AI 输入区
 with st.expander("🤖 使用 AI 自动添加房源", expanded=True):
-    col1, col2, col3 = st.columns([2, 1, 1])
-    loc_input = col1.text_input("🏠 输入车站名 (如: 西川口)", placeholder="新大久保, 中野...")
-    rent_input = col2.number_input("💰 预估月租", value=80000, step=1000)
+    c1, c2, c3, c4 = st.columns([1.5, 1.5, 1, 1])
+    name_input = c1.text_input("🏠 房源名称", placeholder="例如: 阳光公寓 302")
+    loc_input = c2.text_input("📍 车站名", placeholder="例如: 西川口")
+    rent_input = c3.number_input("💰 预估月租", value=80000, step=1000)
     
-    if col3.button("🚀 AI 自动填表", use_container_width=True):
+    if c4.button("🚀 AI 自动填表", use_container_width=True):
         if loc_input:
-            with st.spinner(f"AI 正在检索 {loc_input} 的路径..."):
+            with st.spinner(f"AI 正在检索路径..."):
                 s_data = get_transit(loc_input, DEST_SCHOOL)
                 j_data = get_transit(loc_input, DEST_JUKU)
                 if s_data and j_data:
                     new_row = pd.DataFrame([{
+                        "房源名称": name_input if name_input else f"{loc_input}新房源",
                         "房源位置": loc_input,
+                        "房源图片URL": "", # 留空给用户手动粘贴
                         "月房租(円)": rent_input,
                         "管理费(円)": 5000,
                         "学时(分)": s_data['mins'],
@@ -77,12 +79,17 @@ with st.expander("🤖 使用 AI 自动添加房源", expanded=True):
                     st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_row], ignore_index=True)
                     st.rerun()
 
-# C. 可编辑表格区
+# C. 可编辑表格区 (配置图片列预览)
 st.subheader("📝 房源数据清单")
 edited_df = st.data_editor(
     st.session_state.df_houses, 
     num_rows="dynamic", 
     use_container_width=True,
+    column_config={
+        "房源图片URL": st.column_config.ImageColumn("房源照片", help="请粘贴房源图片的URL地址"),
+        "月房租(円)": st.column_config.NumberColumn(format="%d"),
+        "管理费(円)": st.column_config.NumberColumn(format="%d"),
+    },
     key="editor"
 )
 st.session_state.df_houses = edited_df
@@ -101,33 +108,36 @@ if not edited_df.empty:
         except: continue
 
         with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 1, 1])
+            # 布局：左侧图片，中间信息，右侧地图
+            img_col, info_col, btn_col = st.columns([1.5, 3, 1])
             
-            # 动态计算月通勤费：(单程票价 * 2 * 天数) * 4.33周
+            # 计算总额
             monthly_transit = (s_fare * 2 * days_school + j_fare * 2 * days_juku) * 4.33
             total = rent + m_fee + monthly_transit + base_living
             
-            with c1:
-                st.markdown(f"### **{row['房源位置']} 房源**")
-                st.write(f"📉 **预估月总支出: {int(total):,} 円**")
-                st.caption(f"月通勤费计算结果: {int(monthly_transit):,} 円")
+            with img_col:
+                if row["房源图片URL"]:
+                    st.image(row["房源图片URL"], use_container_width=True)
+                else:
+                    st.empty()
+                    st.caption("📷 暂无照片 (在上方表格粘贴URL)")
             
-            # 地图按钮
-            base_map = "https://www.google.com/maps/dir/?api=1&travelmode=transit"
-            with c2:
+            with info_col:
+                st.markdown(f"### **{row['房源名称']}** ({row['房源位置']})")
+                st.write(f"📉 **预估月总支出: {int(total):,} 円**")
+                st.write(f"🏠 房租+管理费: {int(rent+m_fee):,} | 🚇 月通勤费: {int(monthly_transit):,}")
+                st.caption(f"路线概要: {row['线路概要']}")
+            
+            with btn_col:
+                base_map = "https://www.google.com/maps/dir/?api=1&travelmode=transit"
                 url_s = f"{base_map}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(DEST_SCHOOL)}"
-                st.link_button(f"🏫 学校 ({row['学时(分)']}min)", url_s, use_container_width=True)
-            with c3:
+                st.link_button(f"🏫 学校 ({row['学时(分)']}m)", url_s, use_container_width=True)
+                
                 url_j = f"{base_map}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(DEST_JUKU)}"
-                st.link_button(f"🎨 私塾 ({row['塾时(分)']}min)", url_j, use_container_width=True)
+                st.link_button(f"🎨 私塾 ({row['塾时(分)']}m)", url_j, use_container_width=True)
 
-    # E. 底部公式说明
-    st.info(f"""
-    **📝 总支出计算公式说明：**
-    1. **月通勤费** = [(学校单程票价 × 2 × {days_school}天) + (私塾单程票价 × 2 × {days_juku}天)] × 4.33周
-    2. **总支出** = 房租 + 管理费 + 月通勤费 + 生活费基数({base_living:,}円)
-    *(你可以在左侧侧边栏修改生活费和通勤频率)*
-    """)
+    # E. 底部公式说明 (保持不变)
+    st.info(f"**总支出公式** = 房租 + 管理费 + [(学校票价×2×{days_school}) + (私塾票价×2×{days_juku})]×4.33 + 生活费({base_living:,}円)")
 
     if st.button("🗑️ 清空所有数据"):
         st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
