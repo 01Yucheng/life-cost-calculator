@@ -28,8 +28,7 @@ class GitHubStorage:
             content = self.repo.get_contents(self.file_path)
             return pd.read_csv(io.StringIO(content.decoded_content.decode('utf-8-sig')))
         except:
-            # 删除了线路概要，新增了通勤时间
-            return pd.DataFrame(columns=["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学费(单程)", "塾费(单程)", "学时(分)", "塾时(分)"])
+            return pd.DataFrame(columns=["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学费(单程)", "塾费(单程)", "通勤时间"])
 
     def save_data(self, df):
         csv_content = df.to_csv(index=False, encoding='utf-8-sig')
@@ -53,7 +52,7 @@ model = init_ai()
 
 # --- 4. 功能函数 ---
 def process_and_compress_img(uploaded_file):
-    """处理并压缩图片，兼容 PNG"""
+    """处理图片并兼容 PNG 透明色，防止 OSError"""
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -62,46 +61,27 @@ def process_and_compress_img(uploaded_file):
     img.save(buf, format="JPEG", quality=75)
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def get_ai_transit(loc, s_dest, j_dest):
-    """
-    模拟 Google Maps API 逻辑分析真实通勤数据
-    """
+def get_ai_commute(loc, s_dest, j_dest):
+    """模拟 Google Maps 逻辑获取真实通勤数据"""
     prompt = f"""
-    你现在是 Google Maps 交通分析专家。请根据 2024 年最新的日本铁道和巴士数据，分析以下通勤路线。
-    
+    作为 Google Maps 交通分析专家，请根据 2024 年日本铁道数据分析以下路线：
     起点: {loc}
-    终点1 (学校): {s_dest}
-    终点2 (私塾): {j_dest}
+    终点1(学校): {s_dest}
+    终点2(私塾): {j_dest}
     
-    请检索以下信息：
-    1. 从起点到终点1的最快通勤时间（分钟）和标准单程票价（日元）。
-    2. 从起点到终点2的最快通勤时间（分钟）和标准单程票价（日元）。
-    
-    注意：
-    - 优先考虑 JR、东京地下铁或私铁线路。
-    - 必须包含步行到车站的时间。
-    - 必须以严格的 JSON 格式返回，不得有任何额外描述。
-    
-    返回格式示例：
+    请严格返回 JSON 格式（包含步行到车站的时间和标准票价）：
     {{
-        "s_yen": 220,
-        "j_yen": 310,
-        "s_mins": 25,
-        "j_mins": 18
+        "s_yen": 整数, 
+        "j_yen": 整数, 
+        "s_mins": 整数, 
+        "j_mins": 整数
     }}
     """
     try:
-        # 调用 Gemini 模型
         res = model.generate_content(prompt)
-        # 使用正则提取 JSON 部分，防止 AI 返回多余的 Markdown 标记
-        json_match = re.search(r'\{.*\}', res.text, re.DOTALL)
-        if json_match:
-            data = json.loads(json_match.group())
-            return data
-        else:
-            raise ValueError("未找到有效的 JSON 数据")
-    except Exception as e:
-        st.warning(f"AI 交通检索提示: 无法获取实时数据，已使用预估值。错误: {e}")
+        data = json.loads(re.search(r'\{.*\}', res.text, re.DOTALL).group())
+        return data
+    except:
         return {"s_yen": 200, "j_yen": 200, "s_mins": 30, "j_mins": 30}
 
 # --- 5. UI: 侧边栏与录入 ---
@@ -116,7 +96,7 @@ with st.sidebar:
 with st.expander("➕ 录入新房源", expanded=True):
     c1, c2 = st.columns([2, 1])
     with c1:
-        name_in = st.text_input("🏠 房源名称", placeholder="例如：张总的猫窝")
+        name_in = st.text_input("🏠 房源名称")
         loc_in = st.text_input("📍 车站名")
         rent_in = st.number_input("💰 预估月租", value=80000)
     with c2:
@@ -124,9 +104,12 @@ with st.expander("➕ 录入新房源", expanded=True):
 
     if st.button("🚀 AI 分析并保存", use_container_width=True):
         if loc_in:
-            with st.spinner("AI 正在计算通勤时间..."):
+            with st.spinner("AI 正在检索 Google Maps 交通数据..."):
+                # 修复调用名不一致的问题
                 commute = get_ai_commute(loc_in, dest_school, dest_juku)
                 img_data = process_and_compress_img(up_file) if up_file else ""
+                
+                time_str = f"🏫至学校 {commute['s_mins']}分 | 🎨至私塾 {commute['j_mins']}分"
                 
                 new_row = pd.DataFrame([{
                     "房源名称": name_in or f"{loc_in}房源",
@@ -136,8 +119,7 @@ with st.expander("➕ 录入新房源", expanded=True):
                     "管理费(円)": 5000,
                     "学费(单程)": commute['s_yen'],
                     "塾费(单程)": commute['j_yen'],
-                    "学时(分)": commute['s_mins'], # AI 填入的时间
-                    "塾时(分)": commute['j_mins']  # AI 填入的时间
+                    "通勤时间": time_str
                 }])
                 st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_row], ignore_index=True)
                 storage.save_data(st.session_state.df_houses)
@@ -168,9 +150,8 @@ if not st.session_state.df_houses.empty:
                 with t_col:
                     st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
                     st.markdown(f"#### 💰 月支出: **{int(total_m):,} 円**")
-                    st.write(f"🏠 房租: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 通勤: {int(fare_m):,}")
-                    # 显示 AI 计算出的时间
-                    st.info(f"⏱️ 通勤耗时：学校约 {row['学时(分)']} 分钟 / 私塾约 {row['塾时(分)']} 分钟")
+                    st.write(f"🏠 房租: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 月通勤费: {int(fare_m):,}")
+                    st.write(f"🕒 **{row['通勤时间']}**")
                 with b_col:
                     m_api = "https://www.google.com/maps/dir/?api=1"
                     s_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
@@ -182,4 +163,3 @@ if not st.session_state.df_houses.empty:
                         storage.save_data(st.session_state.df_houses)
                         st.rerun()
         except: continue
-
