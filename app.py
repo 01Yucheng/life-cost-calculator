@@ -42,9 +42,10 @@ def load_data_from_github():
         file_content = repo.get_contents("house_data.csv")
         return pd.read_csv(BytesIO(file_content.decoded_content))
     except Exception:
+        # 简化：只保留“初期资金投入”
         return pd.DataFrame(columns=[
             "房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", 
-            "初期投入总额", "礼金押金描述", "学时(分)", "学费(单程)", "学定期(月)", 
+            "初期资金投入", "学时(分)", "学费(单程)", "学定期(月)", 
             "塾时(分)", "塾费(单程)", "塾定期(月)", "线路概要"
         ])
 
@@ -121,9 +122,8 @@ with st.expander("➕ 录入新房源", expanded=True):
         loc_in = l_col.text_input("📍 最近车站")
         rent_in = r_col.number_input("💰 月租(円)", value=80000)
         
-        i_col1, i_col2 = st.columns(2)
-        initial_total_in = i_col1.number_input("🔑 初期投入总额(円)", value=0, step=10000)
-        rei_shiki_desc_in = i_col2.text_input("💴 礼押详情备注", placeholder="如：礼1押1")
+        # 简化：只保留一个初期资金投入输入
+        initial_cost_in = st.number_input("🔑 初期资金投入(总计)", value=0, step=10000)
     
     with c2:
         uploaded_file = st.file_uploader("🖼️ 房源照片", type=['png', 'jpg', 'jpeg'])
@@ -142,8 +142,7 @@ with st.expander("➕ 录入新房源", expanded=True):
                         "房源图片": img_data,
                         "月房租(円)": rent_in,
                         "管理费(円)": 5000,
-                        "初期投入总额": initial_total_in,
-                        "礼金押金描述": rei_shiki_desc_in,
+                        "初期资金投入": initial_cost_in,
                         "学时(分)": s_data['mins'],
                         "学费(单程)": s_data['yen'],
                         "学定期(月)": s_data.get('pass_month', s_data['yen'] * 18),
@@ -157,13 +156,20 @@ with st.expander("➕ 录入新房源", expanded=True):
 
 # C. 数据清单表
 st.subheader("📝 房源数据清单")
+# 数据清洗和保护逻辑，解决 ValueError: cannot convert float NaN to integer
+df_for_edit = st.session_state.df_houses.copy()
+num_cols = ["月房租(円)", "管理费(円)", "初期资金投入", "学费(单程)", "学定期(月)", "塾费(单程)", "塾定期(月)"]
+for col in num_cols:
+    if col in df_for_edit.columns:
+        df_for_edit[col] = pd.to_numeric(df_for_edit[col], errors='coerce').fillna(0)
+
 edited_df = st.data_editor(
-    st.session_state.df_houses, 
+    df_for_edit, 
     num_rows="dynamic", 
     use_container_width=True,
     column_config={
         "房源图片": st.column_config.ImageColumn("预览"),
-        "初期投入总额": st.column_config.NumberColumn(format="%d 円"),
+        "初期资金投入": st.column_config.NumberColumn(format="%d 円"),
     },
     key="house_editor_pro"
 )
@@ -172,12 +178,13 @@ st.session_state.df_houses = edited_df
 # D. 报告生成与自动排序
 if not edited_df.empty:
     st.divider()
-    st.subheader(f"📊 房源推荐 (按月均综合成本由低到高排序)")
+    st.subheader(f"📊 房源推荐 (按 {stay_months}个月居住计划排序)")
 
-    # 预计算所有房源的综合成本并存入列表
     report_list = []
     for idx, row in edited_df.iterrows():
         try:
+            if pd.isna(row["房源名称"]) or row["房源名称"] == "": continue
+            
             s_pay = float(row["学费(单程)"]) * 2 * days_school * 4.33
             s_pass = float(row["学定期(月)"])
             best_s = min(s_pay, s_pass) if use_pass_option else s_pay
@@ -187,7 +194,9 @@ if not edited_df.empty:
             best_j = min(j_pay, j_pass) if use_pass_option else j_pay
             
             monthly_fixed = float(row["月房租(円)"]) + float(row["管理费(円)"]) + best_s + best_j + base_living
-            amortized_initial = float(row["初期投入总额"]) / stay_months
+            # 计算初期投入摊销
+            safe_stay = stay_months if stay_months > 0 else 1
+            amortized_initial = float(row["初期资金投入"]) / safe_stay
             grand_total = monthly_fixed + amortized_initial
             
             report_list.append({
@@ -198,14 +207,12 @@ if not edited_df.empty:
             })
         except: continue
     
-    # 执行排序逻辑：按 grand_total 升序
+    # 执行排序
     sorted_reports = sorted(report_list, key=lambda x: x['grand_total'])
 
-    # 循环渲染排序后的卡片
     for i, item in enumerate(sorted_reports):
         row = item['data']
         with st.container(border=True):
-            # 第一名房源加上皇冠标识
             rank_icon = "🥇 " if i == 0 else ""
             img_c, info_c, btn_c = st.columns([1.5, 3, 1])
             with img_c:
@@ -213,8 +220,8 @@ if not edited_df.empty:
             with info_c:
                 st.markdown(f"### {rank_icon}{row['房源名称']} ({row['房源位置']})")
                 st.write(f"📈 **实际月均总支出: {int(item['grand_total']):,} 円**")
-                st.write(f"🏠 纯月固定: {int(item['monthly_fixed']):,} | 🔑 初期分摊: +{int(item['amortized_initial']):,}/月")
-                st.caption(f"⏱️ 耗时: 学校 {row['学时(分)']}分 / 私塾 {row['塾时(分)']}分 | 📝 备注: {row['礼金押金描述']}")
+                st.write(f"🏠 纯月固定: {int(item['monthly_fixed']):,} | 🔑 初期分摊: +{int(item['amortized_initial']):,}/月 (总 {int(row['初期资金投入']):,})")
+                st.caption(f"⏱️ 耗时: 学校 {row['学时(分)']}分 / 私塾 {row['塾时(分)']}分")
             with btn_c:
                 st.link_button(f"🏫 学校地图", get_google_maps_url(row['房源位置'], dest_school), use_container_width=True)
                 st.link_button(f"🎨 私塾地图", get_google_maps_url(row['房源位置'], dest_juku), use_container_width=True)
