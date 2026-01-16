@@ -112,12 +112,12 @@ def routes_compute_transit(
     time_mode: str,  # "departure" or "arrival"
 ) -> dict:
     """
-    Routes API v2: computeRoutes (TRANSIT).
-    必须提供 X-Goog-FieldMask。
+    Routes API v2: computeRoutes (TRANSIT)
+    - 保留 HTTP 状态与原始返回，方便排错
+    - 不 raise_for_status（否则拿不到 error body）
     """
     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
-    # ✅ FieldMask：只取你要用的字段
     field_mask = ",".join([
         "routes.duration",
         "routes.legs.duration",
@@ -138,7 +138,6 @@ def routes_compute_transit(
         "regionCode": "JP",
     }
 
-    # ts(unix seconds) -> RFC3339
     when = dt.datetime.fromtimestamp(ts, tz=JST).isoformat()
     if time_mode == "arrival":
         body["arrivalTime"] = when
@@ -146,8 +145,23 @@ def routes_compute_transit(
         body["departureTime"] = when
 
     r = requests.post(url, headers=headers, json=body, timeout=20)
-    r.raise_for_status()
-    return r.json()
+    raw_text = r.text
+
+    try:
+        data = r.json()
+    except Exception:
+        data = {}
+
+    if not isinstance(data, dict):
+        data = {"_non_dict_json": str(data)}
+
+    # debug fields
+    data["_http_status"] = r.status_code
+    data["_raw_text"] = raw_text[:2000]
+    data["_sent_body"] = body
+    data["_sent_field_mask"] = field_mask
+
+    return data
 
 
 def parse_route(data: dict) -> tuple[int, float | None, str]:
@@ -178,65 +192,36 @@ def parse_route(data: dict) -> tuple[int, float | None, str]:
     return minutes, fare_jpy, summary
 
 
-def routes_compute_transit(
+def transit_route_with_retry(
     o_lat: float, o_lng: float,
     d_lat: float, d_lng: float,
     ts: int,
-    api_key: str,
-    time_mode: str,  # "departure" or "arrival"
-) -> dict:
+    api_key: str
+) -> tuple[bool, dict, str]:
     """
-    Routes API v2: computeRoutes (TRANSIT)
-    关键：把 HTTP 返回完整保留下来，方便排错
+    强制公共交通（TRANSIT）
+    - 先 departureTime
+    - 再 arrivalTime 重试（仍然 TRANSIT）
     """
-    url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+    data = routes_compute_transit(o_lat, o_lng, d_lat, d_lng, ts, api_key, time_mode="departure")
+    if data.get("routes"):
+        data.setdefault("status", "OK")
+        return True, data, "routes_transit_departure"
 
-    field_mask = ",".join([
-        "routes.duration",
-        "routes.legs.duration",
-        "routes.travelAdvisory.transitFare",
-    ])
+    data2 = routes_compute_transit(o_lat, o_lng, d_lat, d_lng, ts, api_key, time_mode="arrival")
+    if data2.get("routes"):
+        data2.setdefault("status", "OK")
+        return True, data2, "routes_transit_arrival"
 
-    headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": field_mask,
-    }
-
-    body = {
-        "origin": {"location": {"latLng": {"latitude": o_lat, "longitude": o_lng}}},
-        "destination": {"location": {"latLng": {"latitude": d_lat, "longitude": d_lng}}},
-        "travelMode": "TRANSIT",
-        "languageCode": "ja",
-        "regionCode": "JP",
-    }
-
-    when = dt.datetime.fromtimestamp(ts, tz=JST).isoformat()
-    if time_mode == "arrival":
-        body["arrivalTime"] = when
+    # 失败：尽量给出可读错误
+    err = extract_error_message(data2)
+    if err:
+        data2["status"] = "ERROR"
+        data2["error_message"] = err
     else:
-        body["departureTime"] = when
+        data2["status"] = "NO_ROUTES"
 
-    r = requests.post(url, headers=headers, json=body, timeout=20)
-
-    # ✅ 不要直接 raise，让我们能看到真实返回
-    raw_text = r.text
-
-    try:
-        data = r.json()
-    except Exception:
-        data = {}
-
-    # ✅ 强制塞入调试信息（不会影响正常 routes 解析）
-    if not isinstance(data, dict):
-        data = {"_non_dict_json": str(data)}
-
-    data["_http_status"] = r.status_code
-    data["_raw_text"] = raw_text[:2000]  # 防止太长
-    data["_sent_body"] = body
-    data["_sent_field_mask"] = field_mask
-
-    return data
+    return False, data2, "routes_transit_arrival"
 
 
 def weighted_merge(
@@ -428,6 +413,7 @@ if run_btn:
                 st.warning("B：API 未返回票价（常见情况），可点击 Google Maps 查看票价。")
             st.link_button("在 Google Maps 打开 B 公共交通导航", mapsB)
 
+        # Weighted merge (one-way weighted avg)
         avg_minutes, avg_fare = weighted_merge(
             okA, a_minutes, a_fare, monthly_oneway_A,
             okB, b_minutes, b_fare, monthly_oneway_B
@@ -448,7 +434,7 @@ if run_btn:
         if debug:
             st.write("出发解析：", o_fmt)
             st.write("A解析：", a_fmt)
-            st.write("B解析：", b_fmt)
+            st.write("B解析：", a_fmt)
             st.write("ts(JST)：", ts)
             st.write("A/B 每月单程次数：", monthly_oneway_A, monthly_oneway_B)
             st.write("加权平均单程分钟：", avg_minutes)
@@ -482,6 +468,7 @@ def row_total_cost(row: pd.Series, time_value_yph: float | None):
     one_way_minutes = float(row.get("加权单程通勤时间(分钟)", 0))
     one_way_fare = float(row.get("加权单程通勤费用(日元)", 0))
 
+    # 往返：*2
     monthly_commute_minutes = one_way_minutes * monthly_oneway_total * 2
     monthly_commute_cost = one_way_fare * monthly_oneway_total * 2
 
@@ -527,4 +514,3 @@ st.dataframe(df_show, use_container_width=True, hide_index=True)
 st.subheader("导出")
 csv = df_sorted.to_csv(index=False).encode("utf-8-sig")
 st.download_button("下载 CSV 结果", data=csv, file_name="生活成本对比.csv", mime="text/csv")
-
