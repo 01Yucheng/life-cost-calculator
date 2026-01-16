@@ -1,18 +1,6 @@
-# 核心 Web 框架
-streamlit
-
-# 数据处理
+streamlit>=1.31.0
 pandas
-
-# 谷歌 Gemini AI SDK (多模态识别与逻辑推理)
-google-generativeai
-
-# GitHub API 交互 (用于云端保存数据)
+google-generativeai>=0.4.0
 PyGithub
-
-# 图像处理 (用于 AI 解析房源照片)
 Pillow
-
-# 辅助工具
-requests
 
