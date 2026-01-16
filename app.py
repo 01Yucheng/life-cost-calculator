@@ -1,12 +1,17 @@
 # app.py
 # 生活成本网页小程序（Streamlit）
 # 功能：租金+通勤成本+通勤时间；支持“输入地址 -> 自动生成通勤时间/票价（若返回）”
-# 防爆：①缓存（同参数24小时不重复请求）②建议在Google Cloud设置配额+限制Key
+# 修复：使用日本时区 JST 生成正确 departure_time（避免云端UTC导致 ZERO_RESULTS）
 #
 # 运行：streamlit run app.py
-# 依赖：streamlit, pandas, requests
+# requirements.txt:
+#   streamlit
+#   pandas
+#   requests
 
 import datetime as dt
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import requests
 import streamlit as st
@@ -17,6 +22,7 @@ st.caption("提示：通勤时间建议按“门到门”（走路+等车+换乘
 
 def money(v: float) -> str:
     return f"¥{v:,.0f}"
+
 
 # =========================
 # Sidebar: 全局参数
@@ -46,15 +52,23 @@ def get_google_api_key():
     except Exception:
         return None
 
-def _normalize_departure_ts(depart_dt: dt.datetime) -> int:
+
+def _normalize_departure_ts_jst(depart_date: dt.date, depart_time: dt.time) -> int:
     """
-    让缓存更容易命中：把出发时间“按5分钟取整”
-    例如 08:33 -> 08:35
-    你也可以改成“按15分钟取整”更省调用。
+    使用日本时区（JST）生成 departure_time 的 timestamp
+    并把分钟按 5 分钟取整，提升缓存命中率。
     """
+    jst = ZoneInfo("Asia/Tokyo")
+
+    # 生成带时区的 datetime（关键：避免云端 UTC 误差）
+    depart_dt = dt.datetime.combine(depart_date, depart_time).replace(tzinfo=jst)
+
+    # 5分钟取整：08:33 -> 08:35
     minute = (depart_dt.minute // 5) * 5
     depart_dt2 = depart_dt.replace(minute=minute, second=0, microsecond=0)
+
     return int(depart_dt2.timestamp())
+
 
 @st.cache_data(ttl=60 * 60 * 24)  # 缓存 24 小时（可改：7天=60*60*24*7）
 def transit_commute_cached(origin: str, destination: str, departure_ts: int, api_key: str):
@@ -72,6 +86,7 @@ def transit_commute_cached(origin: str, destination: str, departure_ts: int, api
         "region": "jp",
         "key": api_key,
     }
+
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
     data = r.json()
@@ -83,7 +98,6 @@ def transit_commute_cached(origin: str, destination: str, departure_ts: int, api
 
     route = data["routes"][0]
     leg = route["legs"][0]
-
     minutes = round(leg["duration"]["value"] / 60)
 
     fare_jpy = None
@@ -127,7 +141,7 @@ st.session_state.listings = edited
 
 
 # =========================
-# NEW：通勤自动计算（地址输入）
+# 通勤自动计算（地址输入）
 # =========================
 st.divider()
 st.subheader("通勤自动计算（输入地址 → 自动生成通勤时间/票价）")
@@ -142,10 +156,10 @@ if not api_key_present:
 
 colA, colB = st.columns([1, 1])
 with colA:
-    origin_addr = st.text_input("出发地址（你住处）", value="", placeholder="例：東京都中野区… 或 车站名也可以")
+    origin_addr = st.text_input("出发地址（你住处）", value="", placeholder="例：浅草駅 / 東京都台東区浅草…")
 with colB:
-    default_dest = "東京都新宿区百人町2丁目 光信ビル"  # 你的语校附近（可改）
-    dest_addr = st.text_input("目的地（默认语校地址，可改）", value=default_dest)
+    default_dest = "新大久保駅"  # 默认更稳（站名不会翻车）
+    dest_addr = st.text_input("目的地（默认语校附近，可改）", value=default_dest)
 
 colC, colD, colE = st.columns([1, 1, 1])
 with colC:
@@ -165,8 +179,7 @@ if calc_btn:
             st.error("请先填写目的地地址。")
         else:
             api_key = get_google_api_key()
-            depart_dt = dt.datetime.combine(depart_date, depart_time)
-            departure_ts = _normalize_departure_ts(depart_dt)
+            departure_ts = _normalize_departure_ts_jst(depart_date, depart_time)
 
             minutes, fare_jpy, summary = transit_commute_cached(
                 origin_addr.strip(),
@@ -210,6 +223,7 @@ def calc_row(row, commute_days, trips_per_day, time_value):
         + float(row["餐饮买菜(月/日元)"])
         + float(row["其他(月/日元)"])
     )
+
     commute_cost = float(row["单程通勤费用(日元)"]) * trips_per_day * commute_days
     money_total = fixed + commute_cost
 
@@ -278,14 +292,3 @@ if time_value is not None:
 st.subheader("导出")
 csv = df_sorted.to_csv(index=False).encode("utf-8-sig")
 st.download_button("下载 CSV 结果", data=csv, file_name="生活成本对比.csv", mime="text/csv")
-
-st.divider()
-st.subheader("防爆建议（强烈推荐你做）")
-st.markdown(
-    "- ✅ **已内置缓存**：同样的（出发地址、目的地、出发时间）24小时内不会重复请求。\n"
-    "- ✅ 建议你在 Google Cloud Console：\n"
-    "  1) 给 Directions API 设置 **每日请求上限（Quotas）**，比如 100/天\n"
-    "  2) 限制 API Key：只允许 **Directions API**，并限制到你的站点域名（HTTP referrers）\n"
-)
-
-
