@@ -16,12 +16,14 @@ def get_google_api_key():
     st.error("❌ 未在 Secrets 中找到 GOOGLE_MAPS_API_KEY")
     st.stop()
 
-# --- 2. Google API 逻辑 ---
+# --- 2. Google API 逻辑逻辑 ---
 
 def get_place_id_and_coords(address, api_key):
     """获取 Place ID 和 经纬度"""
     if not address: return None
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={api_key}&language=ja"
+    # 自动为纯地名加上“东京”前缀提高准确率
+    search_query = address if "东京" in address or "県" in address else f"东京 {address}"
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={urllib.parse.quote(search_query)}&key={api_key}&language=ja"
     try:
         response = requests.get(url)
         data = response.json()
@@ -34,69 +36,50 @@ def get_place_id_and_coords(address, api_key):
                 "formatted_address": result["formatted_address"]
             }
     except Exception as e:
-        st.error(f"Geocoding 错误: {e}")
+        st.error(f"地址解析错误: {e}")
     return None
 
 def get_static_map_url(origin_coords, dest_coords, api_key):
-    """生成静态地图预览链接"""
+    """生成静态地图预览"""
     base_url = "https://maps.googleapis.com/maps/api/staticmap?"
     markers = [
         f"color:red|label:S|{origin_coords['lat']},{origin_coords['lng']}",
         f"color:blue|label:E|{dest_coords['lat']},{dest_coords['lng']}"
     ]
     params = {
-        "size": "600x300",
-        "scale": "2",
-        "markers": markers,
-        "key": api_key,
-        "language": "ja"
+        "size": "600x300", "scale": "2", "markers": markers, "key": api_key, "language": "ja"
     }
     return base_url + urllib.parse.urlencode(params, doseq=True)
 
-def call_routes_v2(origin_id, dest_id, departure_time, api_key, debug=False):
-    """修复后的 Routes API v2 调用"""
+def call_routes_v2(origin_id, dest_id, departure_time, api_key):
+    """Routes API v2 调用"""
     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": "routes.duration,routes.travelAdvisory.transitFare"
     }
-    
     utc_time = departure_time.astimezone(pytz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    
     body = {
         "origin": {"placeId": origin_id},
         "destination": {"placeId": dest_id},
         "travelMode": "TRANSIT",
         "departureTime": utc_time,
-        "languageCode": "ja-JP",
-        "units": "METRIC"
+        "languageCode": "ja-JP", "units": "METRIC"
     }
-    
-    if debug:
-        st.sidebar.subheader("Debug: API Request")
-        st.sidebar.json(body)
-
     response = requests.post(url, headers=headers, json=body)
-    
-    if debug:
-        st.sidebar.subheader(f"Debug: Response ({response.status_code})")
-        st.sidebar.json(response.json())
-        
     return response.status_code, response.json()
 
 # --- 3. UI 界面 ---
 
-st.title("🇯🇵 东京生活成本计算器")
-st.caption("修复版：修正地图渲染列错误 & 优化 API 逻辑")
-
+st.title("🇯🇵 东京生活成本计算器 (稳定版)")
 api_key = get_google_api_key()
 
 with st.sidebar:
     st.header("全局参数")
     use_time_value = st.checkbox("启用时间价值折算", value=False)
     time_value_rate = st.number_input("时间价值 (日元/小时)", value=2000, step=100)
-    debug_mode = st.toggle("Debug 模式", value=False)
+    debug_mode = st.toggle("显示 API 原生数据", value=False)
 
 # A. 房源录入
 st.subheader("1. 房源对比清单")
@@ -113,92 +96,84 @@ st.session_state.df_data = st.data_editor(st.session_state.df_data, num_rows="dy
 # B. 通勤计算
 st.divider()
 st.subheader("2. 通勤自动计算")
-
 c1, c2 = st.columns(2)
 with c1:
-    origin_input = st.text_input("出发住处地址", placeholder="例：新大久保駅")
-    dest_a_input = st.text_input("目的地 A (语校/工作)", placeholder="例：新宿駅")
-    freq_a = st.number_input("A 每周次数", value=5.0, step=0.5)
+    origin_input = st.text_input("出发地 (如: 住处地址/最近车站)", placeholder="例: 新大久保駅")
+    dest_a_input = st.text_input("目的地 A (语校/工作)", placeholder="例: 新宿駅")
+    freq_a = st.number_input("A 每周次数", value=5.0, min_value=0.0, max_value=7.0)
 with c2:
-    target_row = st.number_input("写回表格第几行", value=1, min_value=1, step=1)
-    dest_b_input = st.text_input("目的地 B (私塾/兼职)", placeholder="例：秋葉原駅")
-    freq_b = st.number_input("B 每周次数", value=0.0, step=0.5)
+    target_row = st.number_input("写入表格行号", value=1, min_value=1)
+    dest_b_input = st.text_input("目的地 B (私塾/兼职)", placeholder="例: 秋葉原駅")
+    freq_b = st.number_input("B 每周次数", value=0.0, min_value=0.0, max_value=7.0)
 
-if st.button("🚀 开始计算路线", use_container_width=True):
+if st.button("🚀 开始精准计算路线", use_container_width=True):
     if not origin_input:
-        st.error("请输入出发住处地址")
+        st.warning("请输入出发地")
     else:
-        with st.spinner("计算中..."):
+        with st.spinner("正在检索 Google Maps 最佳路径..."):
             origin_geo = get_place_id_and_coords(origin_input, api_key)
             now = datetime.now(TOKYO_TZ) + timedelta(minutes=10)
             
-            results_to_display = []
-            time_a, fare_a, time_b, fare_b = 0, 0, 0, 0
+            display_list = []
+            results = {"A": {"t": 0, "f": 0}, "B": {"t": 0, "f": 0}}
             
-            # 计算 A
-            if dest_a_input:
-                geo_a = get_place_id_and_coords(dest_a_input, api_key)
-                if geo_a:
-                    code, res = call_routes_v2(origin_geo["place_id"], geo_a["place_id"], now, api_key, debug_mode)
-                    if code == 200 and "routes" in res:
-                        r = res["routes"][0]
-                        time_a = int(r["duration"].replace("s", "")) // 60
-                        fare_a = int(r.get("travelAdvisory", {}).get("transitFare", {}).get("units", 0))
-                        results_to_display.append({"label": "A", "origin": origin_geo, "dest": geo_a, "time": time_a, "fare": fare_a})
+            # 计算逻辑
+            for label, inp in [("A", dest_a_input), ("B", dest_b_input)]:
+                if inp:
+                    geo = get_place_id_and_coords(inp, api_key)
+                    if geo:
+                        code, res = call_routes_v2(origin_geo["place_id"], geo["place_id"], now, api_key)
+                        if code == 200 and "routes" in res and res["routes"]:
+                            route = res["routes"][0]
+                            t = int(route["duration"].replace("s", "")) // 60
+                            f = int(route.get("travelAdvisory", {}).get("transitFare", {}).get("units", 0))
+                            results[label] = {"t": t, "f": f}
+                            display_list.append({"label": label, "o": origin_geo, "d": geo, "t": t, "f": f})
+                        else:
+                            st.error(f"无法找到前往 {label} 的公交路线，请确认地址。")
 
-            # 计算 B
-            if dest_b_input:
-                geo_b = get_place_id_and_coords(dest_b_input, api_key)
-                if geo_b:
-                    code, res = call_routes_v2(origin_geo["place_id"], geo_b["place_id"], now, api_key, debug_mode)
-                    if code == 200 and "routes" in res:
-                        r = res["routes"][0]
-                        time_b = int(r["duration"].replace("s", "")) // 60
-                        fare_b = int(r.get("travelAdvisory", {}).get("transitFare", {}).get("units", 0))
-                        results_to_display.append({"label": "B", "origin": origin_geo, "dest": geo_b, "time": time_b, "fare": fare_b})
-
-            # 更新表格逻辑
-            total_freq = freq_a + freq_b
-            if total_freq > 0:
-                weighted_time = (time_a * freq_a + time_b * freq_b) / total_freq
-                weighted_fare = (fare_a * freq_a + fare_b * freq_b) / total_freq
+            # 写回 session_state
+            total_f = freq_a + freq_b
+            if total_f > 0:
+                w_time = (results["A"]["t"] * freq_a + results["B"]["t"] * freq_b) / total_f
+                w_fare = (results["A"]["f"] * freq_a + results["B"]["f"] * freq_b) / total_f
                 
-                row_idx = target_row - 1
-                if row_idx < len(st.session_state.df_data):
-                    st.session_state.df_data.iat[row_idx, 7] = round(weighted_time, 1)
-                    st.session_state.df_data.iat[row_idx, 8] = round(weighted_fare, 1)
-                    st.session_state.df_data.iat[row_idx, 9] = freq_a
-                    st.session_state.df_data.iat[row_idx, 10] = freq_b
-                    st.success(f"已更新第 {target_row} 行数据")
+                ridx = target_row - 1
+                if ridx < len(st.session_state.df_data):
+                    st.session_state.df_data.iat[ridx, 7] = round(w_time, 1)
+                    st.session_state.df_data.iat[ridx, 8] = round(w_fare, 1)
+                    st.session_state.df_data.iat[ridx, 9] = freq_a
+                    st.session_state.df_data.iat[ridx, 10] = freq_b
+                    st.success(f"✅ 第 {target_row} 行房源通勤数据已更新！")
                     
-                    # 只有在有结果时才渲染预览
-                    if results_to_display:
+                    if display_list:
                         st.subheader("🗺️ 路线预览")
-                        cols = st.columns(len(results_to_display))
-                        for i, res in enumerate(results_to_display):
+                        cols = st.columns(len(display_list))
+                        for i, item in enumerate(display_list):
                             with cols[i]:
-                                st.write(f"**路线 {res['label']}** ({res['time']}分 / {res['fare']}円)")
-                                st.image(get_static_map_url(res['origin'], res['dest'], api_key))
+                                st.info(f"**路线 {item['label']}**: {item['t']} 分钟 / {item['f']} 日元")
+                                st.image(get_static_map_url(item['o'], item['d'], api_key))
                 else:
-                    st.error("目标行不存在")
+                    st.error("指定的行号超出了房源列表范围。")
 
-# --- 4. 汇总展示 ---
+# --- 4. 汇总分析 ---
 st.divider()
-st.subheader("3. 成本分析报告")
+st.subheader("3. 综合月度支出排名 (按成本从低到高)")
 
-df = st.session_state.df_data.copy()
-if not df.empty:
-    df["每月单程次数"] = (df["A每周次数"] + df["B每周次数"]) * 4.33
-    df["每月固定支出"] = df.iloc[:, 1:7].sum(axis=1)
-    df["每月通勤支出"] = df["加权单程通勤费用(日元)"] * df["每月单程次数"] * 2
-    df["现金总支出/月"] = df["每月固定支出"] + df["每月通勤支出"]
+final_df = st.session_state.df_data.copy()
+if not final_df.empty:
+    # 基础现金计算 (每月平均 4.33 周)
+    final_df["每月单程次数"] = (final_df["A每周次数"] + final_df["B每周次数"]) * 4.33
+    final_df["固定支出"] = final_df.iloc[:, 1:7].astype(float).sum(axis=1)
+    final_df["通勤支出"] = final_df["加权单程通勤费用(日元)"] * final_df["每月单程次数"] * 2
+    final_df["月现金总支出"] = final_df["固定支出"] + final_df["通勤支出"]
     
     if use_time_value:
-        df["每月通勤时数"] = (df["加权单程通勤时间(分钟)"] * df["每月单程次数"] * 2) / 60
-        df["时间成本/月"] = df["每月通勤时数"] * time_value_rate
-        df["综合总成本/月"] = df["现金总支出/月"] + df["时间成本/月"]
-        df = df.sort_values("综合总成本/月")
+        final_df["月通勤时数"] = (final_df["加权单程通勤时间(分钟)"] * final_df["每月单程次数"] * 2) / 60
+        final_df["隐性时间成本"] = final_df["月通勤时数"] * time_value_rate
+        final_df["综合成本(含时间)"] = final_df["月现金总支出"] + final_df["隐性时间成本"]
+        final_df = final_df.sort_values("综合成本(含时间)")
     else:
-        df = df.sort_values("现金总支出/月")
+        final_df = final_df.sort_values("月现金总支出")
 
-    st.dataframe(df.style.highlight_min(axis=0, color="#1b4d3e"), use_container_width=True)
+    st.dataframe(final_df.style.highlight_min(axis=0, color="#1b4d3e"), use_container_width=True)
