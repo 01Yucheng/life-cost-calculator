@@ -19,7 +19,6 @@ def init_ai():
         st.stop()
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    # 优先选择 flash 模型以保证速度
     target = "models/gemini-1.5-flash"
     return genai.GenerativeModel(target if target in models else models[0])
 
@@ -36,7 +35,16 @@ def get_transit(origin, destination):
     except: return None
 
 # --- 3. UI 界面 ---
-st.title("🗼 东京生活成本 AI 计算器 (可编辑版)")
+st.title("🗼 东京生活成本 AI 计算器")
+
+# A. 全局计算参数设置 (放置在侧边栏或顶部，方便修改)
+with st.sidebar:
+    st.header("⚙️ 计算参数设置")
+    st.info("在此修改参数，下方报告的总支出将实时重算。")
+    base_living = st.number_input("🍔 月固定生活费 (食费/杂费)", value=60000, step=5000)
+    days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
+    days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
+    st.caption("注：0.5 天/周 表示每两周去一次。")
 
 # 初始化数据表
 if "df_houses" not in st.session_state:
@@ -44,7 +52,7 @@ if "df_houses" not in st.session_state:
         "房源位置", "月房租(円)", "管理费(円)", "学时(分)", "学费(单程)", "塾时(分)", "塾费(单程)", "线路概要"
     ])
 
-# A. AI 输入区
+# B. AI 输入区
 with st.expander("🤖 使用 AI 自动添加房源", expanded=True):
     col1, col2, col3 = st.columns([2, 1, 1])
     loc_input = col1.text_input("🏠 输入车站名 (如: 西川口)", placeholder="新大久保, 中野...")
@@ -69,44 +77,40 @@ with st.expander("🤖 使用 AI 自动添加房源", expanded=True):
                     st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_row], ignore_index=True)
                     st.rerun()
 
-# B. 可编辑表格区
-st.subheader("📝 房源数据清单 (可双击修改数字)")
-# 使用 data_editor 让用户可以微调数据
+# C. 可编辑表格区
+st.subheader("📝 房源数据清单")
 edited_df = st.data_editor(
     st.session_state.df_houses, 
     num_rows="dynamic", 
     use_container_width=True,
     key="editor"
 )
-# 同步编辑后的数据到 session_state
 st.session_state.df_houses = edited_df
 
-# C. 最终分析报告
+# D. 最终分析报告
 if not edited_df.empty:
     st.divider()
-    st.subheader("📊 最终对比报告 (含地图)")
+    st.subheader("📊 最终对比报告")
     
     for idx, row in edited_df.iterrows():
-        # 确保数据为数字类型防止报错
         try:
             rent = float(row["月房租(円)"])
             m_fee = float(row["管理费(円)"])
             s_fare = float(row["学费(单程)"])
             j_fare = float(row["塾费(单程)"])
-        except:
-            continue
+        except: continue
 
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 1, 1])
             
-            # 这里的权重：学校每周5天(10次往返)，私塾每周平均1次
-            monthly_transit = (s_fare * 10 + j_fare * 1) * 4.33
-            total = rent + m_fee + monthly_transit + 60000 # 6万生活费基数
+            # 动态计算月通勤费：(单程票价 * 2 * 天数) * 4.33周
+            monthly_transit = (s_fare * 2 * days_school + j_fare * 2 * days_juku) * 4.33
+            total = rent + m_fee + monthly_transit + base_living
             
             with c1:
                 st.markdown(f"### **{row['房源位置']} 房源**")
                 st.write(f"📉 **预估月总支出: {int(total):,} 円**")
-                st.caption(f"线路: {row['线路概要']} | 月通勤费: {int(monthly_transit):,}")
+                st.caption(f"月通勤费计算结果: {int(monthly_transit):,} 円")
             
             # 地图按钮
             base_map = "https://www.google.com/maps/dir/?api=1&travelmode=transit"
@@ -116,6 +120,14 @@ if not edited_df.empty:
             with c3:
                 url_j = f"{base_map}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(DEST_JUKU)}"
                 st.link_button(f"🎨 私塾 ({row['塾时(分)']}min)", url_j, use_container_width=True)
+
+    # E. 底部公式说明
+    st.info(f"""
+    **📝 总支出计算公式说明：**
+    1. **月通勤费** = [(学校单程票价 × 2 × {days_school}天) + (私塾单程票价 × 2 × {days_juku}天)] × 4.33周
+    2. **总支出** = 房租 + 管理费 + 月通勤费 + 生活费基数({base_living:,}円)
+    *(你可以在左侧侧边栏修改生活费和通勤频率)*
+    """)
 
     if st.button("🗑️ 清空所有数据"):
         st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
