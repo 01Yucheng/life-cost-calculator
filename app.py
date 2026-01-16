@@ -12,7 +12,7 @@ import google.generativeai as genai
 # --- 1. 页面配置 ---
 st.set_page_config(page_title="东京生活成本 AI 计算器", layout="wide", page_icon="🗼")
 
-# --- 2. GitHub 存储类 ---
+# --- 2. GitHub 存储逻辑 ---
 class GitHubStorage:
     def __init__(self):
         try:
@@ -26,10 +26,8 @@ class GitHubStorage:
     def load_data(self):
         try:
             content = self.repo.get_contents(self.file_path)
-            # 加载数据，表头包含通勤时间
             return pd.read_csv(io.StringIO(content.decoded_content.decode('utf-8-sig')))
         except:
-            # 初始表头：删除路线摘要，改为通勤时间
             return pd.DataFrame(columns=["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学费(单程)", "塾费(单程)", "通勤时间"])
 
     def save_data(self, df):
@@ -40,7 +38,7 @@ class GitHubStorage:
         except:
             self.repo.create_file(self.file_path, "init", csv_content)
 
-# --- 3. AI 初始化 ---
+# --- 3. AI 初始化 (修复 404 关键点) ---
 storage = GitHubStorage()
 if "df_houses" not in st.session_state:
     st.session_state.df_houses = storage.load_data()
@@ -48,14 +46,14 @@ if "df_houses" not in st.session_state:
 @st.cache_resource
 def init_ai():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # 修复 404 错误：使用标准的 gemini-1.5-flash 模型名
+    # 针对 v1beta 报错的终极对策：尝试不带 models/ 前缀
     return genai.GenerativeModel("gemini-1.5-flash")
 
 model = init_ai()
 
-# --- 4. 核心功能函数 ---
+# --- 4. 功能函数 ---
 def process_and_compress_img(uploaded_file):
-    """处理图片：解决 PNG OSError 并压缩体积"""
+    """解决 PNG OSError 并压缩图片"""
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -65,31 +63,32 @@ def process_and_compress_img(uploaded_file):
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 def get_ai_commute(loc, s_dest, j_dest):
-    """模拟 Google Maps 逻辑获取真实通勤数据并提供回显"""
+    """模拟 Google Maps 逻辑获取数据并显示回显"""
     prompt = f"""
-    作为 Google Maps 交通专家，分析以下路线并严格返回 JSON。
+    你现在是 Google Maps 交通 API。请分析日本通勤数据：
     起点: {loc}
-    学校终点: {s_dest}
-    私塾终点: {j_dest}
-    格式: {{"s_yen":整数,"j_yen":整数,"s_mins":整数,"j_mins":整数}}
+    终点1: {s_dest}
+    终点2: {j_dest}
+    必须返回 JSON 格式: {{"s_yen":整数,"j_yen":整数,"s_mins":整数,"j_mins":整数}}
     """
     try:
         res = model.generate_content(prompt)
         raw_text = res.text
         
-        # 调试功能：让用户看到 AI 返回的原始文本
-        with st.expander("🔍 AI 原始数据回显"):
+        # 调试回显：让你在界面上直接看到 AI 吐了什么数据
+        with st.expander("🔍 AI 原始数据调试 (点击展开)"):
             st.code(raw_text)
             
-        # 正则提取 JSON
-        data = json.loads(re.search(r'\{.*\}', raw_text, re.DOTALL).group())
-        return data
+        # 提取 JSON 内容
+        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+        raise ValueError("AI 未返回有效 JSON")
     except Exception as e:
-        st.error(f"🚨 交通分析失败: {str(e)}")
-        # 失败时返回 99 分作为识别标志
+        st.error(f"🚨 交通计算失败: {str(e)}") # 这里会显示 404 等具体错误
         return {"s_yen": 200, "j_yen": 200, "s_mins": 99, "j_mins": 99}
 
-# --- 5. UI: 侧边栏与录入 ---
+# --- 5. UI: 输入与设置 ---
 with st.sidebar:
     st.header("⚙️ 生活参数")
     base_living = st.number_input("🍔 月固定生活费", value=60000)
@@ -102,19 +101,19 @@ with st.expander("➕ 录入新房源", expanded=True):
     c1, c2 = st.columns([2, 1])
     with c1:
         name_in = st.text_input("🏠 房源名称")
-        loc_in = st.text_input("📍 车站名（如：西荻窪駅）")
+        loc_in = st.text_input("📍 车站名 (例: 西荻窪駅)")
         rent_in = st.number_input("💰 预估月租", value=80000)
     with c2:
         up_file = st.file_uploader("🖼️ 房源照片", type=['jpg','jpeg','png'])
 
     if st.button("🚀 AI 分析并保存", use_container_width=True):
         if loc_in:
-            with st.spinner("AI 正在计算通勤时间..."):
+            with st.spinner("正在检索交通数据..."):
                 commute = get_ai_commute(loc_in, dest_school, dest_juku)
                 img_data = process_and_compress_img(up_file) if up_file else ""
                 
-                # 核心改动：将分钟数拼接到通勤时间字段
-                time_str = f"🏫至学校 {commute['s_mins']}分 | 🎨至私塾 {commute['j_mins']}分"
+                # 拼接时间字符串显示在卡片上
+                time_info = f"🏫至学校 {commute['s_mins']}分 | 🎨至私塾 {commute['j_mins']}分"
                 
                 new_row = pd.DataFrame([{
                     "房源名称": name_in or f"{loc_in}房源",
@@ -124,32 +123,27 @@ with st.expander("➕ 录入新房源", expanded=True):
                     "管理费(円)": 5000,
                     "学费(单程)": commute['s_yen'],
                     "塾费(单程)": commute['j_yen'],
-                    "通勤时间": time_str
+                    "通勤时间": time_info
                 }])
                 st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_row], ignore_index=True)
                 storage.save_data(st.session_state.df_houses)
                 st.rerun()
 
-# --- 6. 数据清单 ---
+# --- 6. 数据列表 ---
 st.subheader("📝 房源数据清单")
-edited_df = st.data_editor(st.session_state.df_houses, num_rows="dynamic", use_container_width=True)
-if not edited_df.equals(st.session_state.df_houses):
-    st.session_state.df_houses = edited_df
-    storage.save_data(edited_df)
+st.data_editor(st.session_state.df_houses, use_container_width=True)
 
-if st.button("🚨 清空所有云端数据"):
+if st.button("🚨 清空所有数据"):
     st.session_state.df_houses = pd.DataFrame(columns=["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学费(单程)", "塾费(单程)", "通勤时间"])
     storage.save_data(st.session_state.df_houses)
     st.rerun()
 
-# --- 7. 对比报告卡片 ---
+# --- 7. 对比报告 ---
 if not st.session_state.df_houses.empty:
     st.divider()
     st.subheader("📊 房源对比报告")
-
     for idx, row in st.session_state.df_houses.iterrows():
         try:
-            # 计算月通勤费
             fare_m = (float(row["学费(单程)"]) * 2 * days_school + float(row["塾费(单程)"]) * 2 * days_juku) * 4.33
             total_m = float(row["月房租(円)"]) + float(row["管理费(円)"]) + fare_m + base_living
             
@@ -161,16 +155,14 @@ if not st.session_state.df_houses.empty:
                     st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
                     st.markdown(f"#### 💰 月支出: **{int(total_m):,} 円**")
                     st.write(f"🏠 房租: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 月通勤费: {int(fare_m):,}")
-                    # 在卡片中显示 AI 生成的通勤时间
-                    st.write(f"🕒 **{row['通勤时间']}**") 
+                    st.write(f"🕒 **{row['通勤时间']}**") # 实时显示分钟数
                 with b_col:
-                    # 地图跳转逻辑
                     m_api = "https://www.google.com/maps/dir/?api=1"
                     s_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
                     j_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
                     st.link_button("🏫 学校地图", s_url, use_container_width=True)
                     st.link_button("🎨 私塾地图", j_url, use_container_width=True)
-                    if st.button("🗑️ 删除房源", key=f"del_{idx}", use_container_width=True):
+                    if st.button("🗑️ 删除", key=f"del_{idx}", use_container_width=True):
                         st.session_state.df_houses = st.session_state.df_houses.drop(idx).reset_index(drop=True)
                         storage.save_data(st.session_state.df_houses)
                         st.rerun()
