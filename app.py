@@ -431,8 +431,11 @@ if run_btn:
             st.write("加权平均单程票价：", avg_fare)
             if not okA:
                 st.write("A raw:", dataA)
+                st.json(dataA)
             if not okB:
                 st.write("B raw:", dataB)
+                st.json(dataB)
+
 
     except Exception as e:
         st.error(str(e))
@@ -509,4 +512,5 @@ st.dataframe(df_show, use_container_width=True, hide_index=True)
 st.subheader("导出")
 csv = df_sorted.to_csv(index=False).encode("utf-8-sig")
 st.download_button("下载 CSV 结果", data=csv, file_name="生活成本对比.csv", mime="text/csv")
+
 
