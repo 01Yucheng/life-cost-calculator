@@ -28,16 +28,16 @@ class GitHubStorage:
             content = self.repo.get_contents(self.file_path)
             return pd.read_csv(io.StringIO(content.decoded_content.decode('utf-8-sig')))
         except:
-            # 初始表头：删除了线路概要，新增了通勤时间
-            return pd.DataFrame(columns=["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学费(单程)", "塾费(单程)", "通勤时间"])
+            # 删除了线路概要，新增了通勤时间
+            return pd.DataFrame(columns=["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学费(单程)", "塾费(单程)", "学时(分)", "塾时(分)"])
 
     def save_data(self, df):
         csv_content = df.to_csv(index=False, encoding='utf-8-sig')
         try:
             contents = self.repo.get_contents(self.file_path)
-            self.repo.update_file(self.file_path, "update data", csv_content, contents.sha)
+            self.repo.update_file(self.file_path, "update", csv_content, contents.sha)
         except:
-            self.repo.create_file(self.file_path, "init data", csv_content)
+            self.repo.create_file(self.file_path, "init", csv_content)
 
 # --- 3. 初始化 ---
 storage = GitHubStorage()
@@ -53,9 +53,8 @@ model = init_ai()
 
 # --- 4. 功能函数 ---
 def process_and_compress_img(uploaded_file):
-    """处理并压缩图片，兼容 PNG 透明色"""
+    """处理并压缩图片，兼容 PNG"""
     img = Image.open(uploaded_file)
-    # 核心修复：处理 PNG 透明通道导致的 OSError
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
     img.thumbnail((400, 400))
@@ -63,15 +62,15 @@ def process_and_compress_img(uploaded_file):
     img.save(buf, format="JPEG", quality=75)
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def get_ai_transit(loc, s_dest, j_dest):
-    """AI 分析通勤票价和时间"""
-    prompt = f"分析日本交通并返回JSON:起点[{loc}]到终点1[{s_dest}]和2[{j_dest}]。格式:{{'s_yen':整数,'j_yen':整数,'time_info':'描述通勤时长，如：学校20分/私塾15分'}}"
+def get_ai_commute(loc, s_dest, j_dest):
+    """AI 直接分析通勤时间"""
+    prompt = f"分析日本交通并返回JSON:起点[{loc}]到终点1[{s_dest}]和2[{j_dest}]。格式:{{'s_yen':整数,'j_yen':整数,'s_mins':整数,'j_mins':整数}}"
     try:
         res = model.generate_content(prompt)
         data = json.loads(re.search(r'\{.*\}', res.text, re.DOTALL).group())
         return data
     except:
-        return {"s_yen": 200, "j_yen": 200, "time_info": "未能获取时间"}
+        return {"s_yen": 200, "j_yen": 200, "s_mins": 30, "j_mins": 30}
 
 # --- 5. UI: 侧边栏与录入 ---
 with st.sidebar:
@@ -85,7 +84,7 @@ with st.sidebar:
 with st.expander("➕ 录入新房源", expanded=True):
     c1, c2 = st.columns([2, 1])
     with c1:
-        name_in = st.text_input("🏠 房源名称")
+        name_in = st.text_input("🏠 房源名称", placeholder="例如：张总的猫窝")
         loc_in = st.text_input("📍 车站名")
         rent_in = st.number_input("💰 预估月租", value=80000)
     with c2:
@@ -94,7 +93,7 @@ with st.expander("➕ 录入新房源", expanded=True):
     if st.button("🚀 AI 分析并保存", use_container_width=True):
         if loc_in:
             with st.spinner("AI 正在计算通勤时间..."):
-                transit = get_ai_transit(loc_in, dest_school, dest_juku)
+                commute = get_ai_commute(loc_in, dest_school, dest_juku)
                 img_data = process_and_compress_img(up_file) if up_file else ""
                 
                 new_row = pd.DataFrame([{
@@ -103,9 +102,10 @@ with st.expander("➕ 录入新房源", expanded=True):
                     "房源图片": img_data,
                     "月房租(円)": rent_in,
                     "管理费(円)": 5000,
-                    "学费(单程)": transit['s_yen'],
-                    "塾费(单程)": transit['j_yen'],
-                    "通勤时间": transit['time_info'] # 替换原本的路线概要
+                    "学费(单程)": commute['s_yen'],
+                    "塾费(单程)": commute['j_yen'],
+                    "学时(分)": commute['s_mins'], # AI 填入的时间
+                    "塾时(分)": commute['j_mins']  # AI 填入的时间
                 }])
                 st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_row], ignore_index=True)
                 storage.save_data(st.session_state.df_houses)
@@ -122,7 +122,6 @@ if not edited_df.equals(st.session_state.df_houses):
 if not st.session_state.df_houses.empty:
     st.divider()
     st.subheader("📊 房源对比报告")
-    # CSS：防止打印分页截断
     st.markdown('<style>@media print {.stContainer {page-break-inside: avoid;}}</style>', unsafe_allow_html=True)
 
     for idx, row in st.session_state.df_houses.iterrows():
@@ -138,14 +137,14 @@ if not st.session_state.df_houses.empty:
                     st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
                     st.markdown(f"#### 💰 月支出: **{int(total_m):,} 円**")
                     st.write(f"🏠 房租: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 通勤: {int(fare_m):,}")
-                    # 显示 AI 填入的通勤时间
-                    st.info(f"⏱️ 通勤时间: {row['通勤时间']}")
+                    # 显示 AI 计算出的时间
+                    st.info(f"⏱️ 通勤耗时：学校约 {row['学时(分)']} 分钟 / 私塾约 {row['塾时(分)']} 分钟")
                 with b_col:
                     m_api = "https://www.google.com/maps/dir/?api=1"
                     s_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
                     j_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
                     st.link_button("🏫 学校地图", s_url, use_container_width=True)
-                    st.link_button("🎨 私塾地图", j_url, use_container_width=True) # 补全私塾按钮
+                    st.link_button("🎨 私塾地图", j_url, use_container_width=True)
                     if st.button("🗑️ 删除房源", key=f"del_{idx}", use_container_width=True):
                         st.session_state.df_houses = st.session_state.df_houses.drop(idx).reset_index(drop=True)
                         storage.save_data(st.session_state.df_houses)
