@@ -7,6 +7,7 @@ import urllib.parse
 import base64
 from github import Github 
 from io import BytesIO    
+from PIL import Image
 
 # --- 1. 配置与 AI 初始化 ---
 st.set_page_config(page_title="东京生活成本 AI 计算器 Pro", layout="wide", page_icon="🗼")
@@ -17,32 +18,19 @@ def init_ai():
         st.error("🔑 未在 Secrets 中找到 GEMINI_API_KEY")
         st.stop()
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target = "models/gemini-3-flash"
-        return genai.GenerativeModel(target if target in models else models[0])
-    except Exception as e:
-        st.error(f"AI 初始化失败: {e}")
-        st.stop()
+    # 使用支持多模态的 flash 模型
+    return genai.GenerativeModel("models/gemini-1.5-flash")
 
 model = init_ai()
 
-# --- 2. GitHub 数据同步工具 ---
-def get_github_repo():
-    try:
-        g = Github(st.secrets["GITHUB_TOKEN"])
-        return g.get_repo(st.secrets["REPO_NAME"])
-    except Exception as e:
-        st.error(f"GitHub 连接失败: {e}")
-        return None
-
+# --- 2. GitHub 数据同步 ---
 def load_data_from_github():
     try:
-        repo = get_github_repo()
+        g = Github(st.secrets["GITHUB_TOKEN"])
+        repo = g.get_repo(st.secrets["REPO_NAME"])
         file_content = repo.get_contents("house_data.csv")
         return pd.read_csv(BytesIO(file_content.decoded_content))
     except Exception:
-        # 简化：只保留“初期资金投入”
         return pd.DataFrame(columns=[
             "房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", 
             "初期资金投入", "学时(分)", "学费(单程)", "学定期(月)", 
@@ -50,182 +38,150 @@ def load_data_from_github():
         ])
 
 def save_data_to_github(df):
-    repo = get_github_repo()
-    if not repo: return
-    csv_string = df.to_csv(index=False, encoding='utf-8-sig')
     try:
+        g = Github(st.secrets["GITHUB_TOKEN"])
+        repo = g.get_repo(st.secrets["REPO_NAME"])
+        csv_string = df.to_csv(index=False, encoding='utf-8-sig')
         contents = repo.get_contents("house_data.csv")
-        repo.update_file(contents.path, "Update from AI Calculator", csv_string, contents.sha)
+        repo.update_file(contents.path, "Update data", csv_string, contents.sha)
         st.success("✅ 数据已同步至 GitHub!")
-    except Exception:
-        repo.create_file("house_data.csv", "Initial commit", csv_string)
-        st.success("🚀 GitHub 数据库已初始化!")
+    except Exception as e:
+        st.error(f"同步失败: {e}")
 
 # --- 3. 工具函数 ---
+def analyze_house_image(uploaded_file):
+    """利用 AI 分析房源图片并提取 JSON 信息"""
+    img = Image.open(uploaded_file)
+    prompt = """
+    你是一位日本不动产专家。请从这张房源图中提取以下信息并返回 JSON 格式：
+    {
+      "name": "房源名称/大楼名",
+      "station": "最近的车站名",
+      "rent": 月租金数字,
+      "admin_fee": 管理费数字,
+      "initial_total": 初期投入总额(礼金+押金+中介费+清扫费等所有开支的总和)
+    }
+    注意：只返回 JSON，不要任何解释。如果某项不确定，请填 0。
+    """
+    response = model.generate_content([prompt, img])
+    try:
+        clean_text = re.sub(r'```json|```', '', response.text).strip()
+        return json.loads(clean_text)
+    except:
+        return None
+
 def get_transit(origin, destination):
-    prompt = (
-        f"作为日本交通专家，请分析从[{origin}]到[{destination}]的通勤。"
-        f"请返回且仅返回一个 JSON 对象，格式如下：\n"
-        f"{{\"mins\": 整数, \"yen\": 单程票价整数, \"pass_month\": 一个月定期券预估价格整数, \"line\": \"路线简称\"}}\n"
-        f"注意：定期券价格约为单程的15-20倍。不要输出任何 Markdown 标签或解释文字。"
-    )
+    prompt = f"从[{origin}]到[{destination}]通勤，返回JSON: {{\"mins\": 整数, \"yen\": 单程票价, \"pass_month\": 定期券, \"line\": \"路线\"}}"
     try:
         response = model.generate_content(prompt)
         clean_text = re.sub(r'```json|```', '', response.text).strip()
-        match = re.search(r'\{.*\}', clean_text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-    except Exception as e:
-        st.error(f"AI 交通解析出错: {e}")
+        return json.loads(clean_text)
+    except:
         return None
-
-def img_to_base64(img_file):
-    return f"data:image/png;base64,{base64.b64encode(img_file.getvalue()).decode()}"
-
-def get_google_maps_url(origin, dest):
-    base = "https://www.google.com/maps/dir/"
-    return f"{base}{urllib.parse.quote(origin)}/{urllib.parse.quote(dest)}/data=!4m2!4m1!3e3"
 
 # --- 4. UI 界面 ---
 st.title("🗼 东京生活成本 AI 计算器 Pro")
 
 with st.sidebar:
     st.header("⚙️ 全局设置")
-    dest_school = st.text_input("🏫 学校地址/车站", value="东京都新宿区百人町2-24-12 (美都里慕)")
-    dest_juku = st.text_input("🎨 私塾地址/车站", value="东京都荒川区西日暮里2-12-5 (尚艺舍)")
-    st.divider()
-    
-    stay_months = st.slider("📅 预计居住时间 (月)", min_value=1, max_value=48, value=24)
-    base_living = st.number_input("🍔 月固定基本生活费", value=60000, step=5000)
+    dest_school = st.text_input("🏫 学校/车站", value="新宿")
+    dest_juku = st.text_input("🎨 私塾/车站", value="西日暮里")
+    stay_months = st.slider("📅 预计居住时间 (月)", 1, 48, 24)
+    base_living = st.number_input("🍔 月固定基本生活费", value=60000)
     days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
-    days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
-    
-    st.divider()
+    days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5)
     use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
     
-    st.subheader("☁️ 云端同步")
-    if st.button("💾 保存当前到 GitHub", use_container_width=True, type="primary"):
+    if st.button("💾 保存到 GitHub", type="primary"):
         save_data_to_github(st.session_state.df_houses)
-    if st.button("🔄 从 GitHub 刷新", use_container_width=True):
-        st.session_state.df_houses = load_data_from_github()
-        st.rerun()
 
 if "df_houses" not in st.session_state:
     st.session_state.df_houses = load_data_from_github()
 
 # B. AI 输入区
-with st.expander("➕ 录入新房源", expanded=True):
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        n_col, l_col, r_col = st.columns([1.5, 1.5, 1])
-        name_in = n_col.text_input("🏠 房源名称")
-        loc_in = l_col.text_input("📍 最近车站")
-        rent_in = r_col.number_input("💰 月租(円)", value=80000)
-        
-        # 简化：只保留一个初期资金投入输入
-        initial_cost_in = st.number_input("🔑 初期资金投入(总计)", value=0, step=10000)
+with st.expander("➕ 录入新房源 (支持 AI 图片识别)", expanded=True):
+    uploaded_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'])
     
-    with c2:
-        uploaded_file = st.file_uploader("🖼️ 房源照片", type=['png', 'jpg', 'jpeg'])
+    c1, c2 = st.columns([2, 1])
+    # 自动填充逻辑
+    ai_data = {"name": "", "station": "", "rent": 80000, "admin_fee": 5000, "initial_total": 0}
+    
+    if uploaded_file and st.button("🔍 AI 自动分析照片"):
+        with st.spinner("AI 正在解析房源参数..."):
+            res = analyze_house_image(uploaded_file)
+            if res: ai_data.update(res)
 
-    if st.button("🚀 AI 自动计算并添加", use_container_width=True):
+    with c1:
+        n_col, l_col = st.columns(2)
+        name_in = n_col.text_input("🏠 房源名称", value=ai_data["name"])
+        loc_in = l_col.text_input("📍 最近车站", value=ai_data["station"])
+        
+        r_col, a_col, i_col = st.columns(3)
+        rent_in = r_col.number_input("💰 月租(円)", value=int(ai_data["rent"]))
+        admin_in = a_col.number_input("🏢 管理费", value=int(ai_data["admin_fee"]))
+        initial_in = i_col.number_input("🔑 初期资金投入", value=int(ai_data["initial_total"]))
+
+    if st.button("🚀 计算通勤并添加", use_container_width=True):
         if loc_in:
-            with st.spinner("AI 正在计算最佳路径..."):
+            with st.spinner("计算通勤路径..."):
                 s_data = get_transit(loc_in, dest_school)
                 j_data = get_transit(loc_in, dest_juku)
-                img_data = img_to_base64(uploaded_file) if uploaded_file else ""
+                img_str = f"data:image/png;base64,{base64.b64encode(uploaded_file.getvalue()).decode()}" if uploaded_file else ""
                 
                 if s_data and j_data:
                     new_row = pd.DataFrame([{
-                        "房源名称": name_in if name_in else f"{loc_in}房源",
-                        "房源位置": loc_in,
-                        "房源图片": img_data,
-                        "月房租(円)": rent_in,
-                        "管理费(円)": 5000,
-                        "初期资金投入": initial_cost_in,
-                        "学时(分)": s_data['mins'],
-                        "学费(单程)": s_data['yen'],
-                        "学定期(月)": s_data.get('pass_month', s_data['yen'] * 18),
-                        "塾时(分)": j_data['mins'],
-                        "塾费(单程)": j_data['yen'],
-                        "塾定期(月)": j_data.get('pass_month', j_data['yen'] * 18),
-                        "线路概要": s_data['line']
+                        "房源名称": name_in, "房源位置": loc_in, "房源图片": img_str,
+                        "月房租(円)": rent_in, "管理费(円)": admin_in, "初期资金投入": initial_in,
+                        "学时(分)": s_data['mins'], "学费(单程)": s_data['yen'], "学定期(月)": s_data.get('pass_month', 0),
+                        "塾时(分)": j_data['mins'], "塾费(单程)": j_data['yen'], "塾定期(月)": j_data.get('pass_month', 0)
                     }])
                     st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_row], ignore_index=True)
                     st.rerun()
 
-# C. 数据清单表
+# C. 数据清单管理
 st.subheader("📝 房源数据清单")
-# 数据清洗和保护逻辑，解决 ValueError: cannot convert float NaN to integer
-df_for_edit = st.session_state.df_houses.copy()
-num_cols = ["月房租(円)", "管理费(円)", "初期资金投入", "学费(单程)", "学定期(月)", "塾费(单程)", "塾定期(月)"]
-for col in num_cols:
-    if col in df_for_edit.columns:
-        df_for_edit[col] = pd.to_numeric(df_for_edit[col], errors='coerce').fillna(0)
+# 预处理数据防止 NaN 导致转换 int 报错
+df_edit = st.session_state.df_houses.copy()
+for col in ["月房租(円)", "管理费(円)", "初期资金投入", "学费(单程)", "学定期(月)", "塾费(单程)", "塾定期(月)"]:
+    if col in df_edit.columns:
+        df_edit[col] = pd.to_numeric(df_edit[col], errors='coerce').fillna(0)
 
-edited_df = st.data_editor(
-    df_for_edit, 
-    num_rows="dynamic", 
-    use_container_width=True,
-    column_config={
-        "房源图片": st.column_config.ImageColumn("预览"),
-        "初期资金投入": st.column_config.NumberColumn(format="%d 円"),
-    },
-    key="house_editor_pro"
-)
+edited_df = st.data_editor(df_edit, num_rows="dynamic", use_container_width=True)
 st.session_state.df_houses = edited_df
 
-# D. 报告生成与自动排序
+# D. 自动排序报告
 if not edited_df.empty:
     st.divider()
-    st.subheader(f"📊 房源推荐 (按 {stay_months}个月居住计划排序)")
+    st.subheader(f"📊 房源推荐 (按 {stay_months}个月居住平摊排序)")
 
     report_list = []
-    for idx, row in edited_df.iterrows():
+    for _, row in edited_df.iterrows():
         try:
-            if pd.isna(row["房源名称"]) or row["房源名称"] == "": continue
+            # 通勤费逻辑
+            s_pay = row["学费(单程)"] * 2 * days_school * 4.33
+            s_pass = row["学定期(月)"]
+            best_s = min(s_pay, s_pass) if (use_pass_option and s_pass > 0) else s_pay
             
-            s_pay = float(row["学费(单程)"]) * 2 * days_school * 4.33
-            s_pass = float(row["学定期(月)"])
-            best_s = min(s_pay, s_pass) if use_pass_option else s_pay
+            j_pay = row["塾费(单程)"] * 2 * days_juku * 4.33
+            j_pass = row["塾定期(月)"]
+            best_j = min(j_pay, j_pass) if (use_pass_option and j_pass > 0) else j_pay
             
-            j_pay = float(row["塾费(单程)"]) * 2 * days_juku * 4.33
-            j_pass = float(row["塾定期(月)"])
-            best_j = min(j_pay, j_pass) if use_pass_option else j_pay
+            monthly_fixed = row["月房租(円)"] + row["管理费(円)"] + best_s + best_j + base_living
+            amortized_init = row["初期资金投入"] / (stay_months if stay_months > 0 else 1)
+            total = monthly_fixed + amortized_init
             
-            monthly_fixed = float(row["月房租(円)"]) + float(row["管理费(円)"]) + best_s + best_j + base_living
-            # 计算初期投入摊销
-            safe_stay = stay_months if stay_months > 0 else 1
-            amortized_initial = float(row["初期资金投入"]) / safe_stay
-            grand_total = monthly_fixed + amortized_initial
-            
-            report_list.append({
-                "data": row,
-                "grand_total": grand_total,
-                "monthly_fixed": monthly_fixed,
-                "amortized_initial": amortized_initial
-            })
+            report_list.append({"data": row, "total": total, "fixed": monthly_fixed, "amortized": amortized_init})
         except: continue
     
-    # 执行排序
-    sorted_reports = sorted(report_list, key=lambda x: x['grand_total'])
+    sorted_reports = sorted(report_list, key=lambda x: x['total'])
 
     for i, item in enumerate(sorted_reports):
-        row = item['data']
+        r = item['data']
         with st.container(border=True):
-            rank_icon = "🥇 " if i == 0 else ""
-            img_c, info_c, btn_c = st.columns([1.5, 3, 1])
-            with img_c:
-                if row["房源图片"]: st.image(row["房源图片"], use_container_width=True)
-            with info_c:
-                st.markdown(f"### {rank_icon}{row['房源名称']} ({row['房源位置']})")
-                st.write(f"📈 **实际月均总支出: {int(item['grand_total']):,} 円**")
-                st.write(f"🏠 纯月固定: {int(item['monthly_fixed']):,} | 🔑 初期分摊: +{int(item['amortized_initial']):,}/月 (总 {int(row['初期资金投入']):,})")
-                st.caption(f"⏱️ 耗时: 学校 {row['学时(分)']}分 / 私塾 {row['塾时(分)']}分")
-            with btn_c:
-                st.link_button(f"🏫 学校地图", get_google_maps_url(row['房源位置'], dest_school), use_container_width=True)
-                st.link_button(f"🎨 私塾地图", get_google_maps_url(row['房源位置'], dest_juku), use_container_width=True)
-
-    if st.button("🗑️ 清空所有数据"):
-        st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
-        st.rerun()
+            c_img, c_txt = st.columns([1, 4])
+            with c_img:
+                if r["房源图片"]: st.image(r["房源图片"])
+            with c_txt:
+                st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
+                st.write(f"📈 **实际月均总支出: {int(item['total']):,} 円**")
+                st.write(f"🏠 租金+通勤+生活: {int(item['fixed']):,} | 🔑 初期平摊: +{int(item['amortized']):,}/月")
