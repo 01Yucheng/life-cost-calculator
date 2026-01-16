@@ -4,76 +4,106 @@ import google.generativeai as genai
 import json
 import re
 
-# --- 1. 页面与 AI 配置 ---
-st.set_page_config(page_title="东京生活成本 AI 计算器", layout="wide", page_icon="🗼")
+# --- 1. 页面基本配置 ---
+st.set_page_config(
+    page_title="东京生活成本 AI 计算器", 
+    layout="wide", 
+    page_icon="🗼"
+)
 
+# --- 2. AI 引擎初始化逻辑 ---
 def init_gemini():
-    if "GEMINI_API_KEY" in st.secrets:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        # 使用 flash 模型，速度最快且免费额度高
-        return genai.GenerativeModel('gemini-1.5-flash')
-    else:
-        st.error("⚠️ 未检测到 GEMINI_API_KEY。请在 Secrets 中配置后再运行。")
+    """初始化并检测可用模型，解决 404/403 问题"""
+    if "GEMINI_API_KEY" not in st.secrets:
+        st.error("❌ 未在 Secrets 中检测到 GEMINI_API_KEY。")
+        st.stop()
+    
+    api_key = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=api_key)
+    
+    try:
+        # 自动获取当前 Key 拥有的模型列表
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # 优先级：1.5-flash > 1.0-pro
+        selected_model = ""
+        for m in ["models/gemini-1.5-flash", "models/gemini-1.0-pro"]:
+            if m in models:
+                selected_model = m
+                break
+        
+        if not selected_model and models:
+            selected_model = models[0]
+            
+        if not selected_model:
+            st.error("❌ 你的 API Key 暂不支持任何生成模型，请检查 Google Cloud 权限。")
+            st.stop()
+            
+        return genai.GenerativeModel(selected_model), selected_model
+    
+    except Exception as e:
+        st.error(f"❌ API 连接失败: {str(e)}")
+        st.info("💡 提示：如果是 403 错误，请前往 Google AI Studio 检查 API Key 是否被封锁或限制。")
         st.stop()
 
-model = init_gemini()
+# 初始化 AI
+model, model_name = init_gemini()
 
-# --- 2. AI 核心逻辑：通勤解析 ---
+# --- 3. 核心功能：AI 交通解析 ---
 def ask_ai_transit(origin, destination):
+    """通过 AI 获取结构化的交通数据"""
     prompt = f"""
-    你是一个日本交通地理专家。请分析以下通勤路径：
+    作为日本交通专家，请分析以下路线的单程通勤（早高峰时间）：
     起点：{origin}
     终点：{destination}
     
-    请严格按 JSON 格式输出，不要有任何多余文字：
+    必须且只能返回以下 JSON 格式，不要包含 Markdown 格式标记或额外解释：
     {{
-        "duration": 整数(分钟数),
-        "fare": 整数(单程票价日元),
-        "route": "字符串(简短路线说明，如：JR山手线直达)"
+        "duration": 整数(分钟),
+        "fare": 整数(日元),
+        "route": "简短描述"
     }}
-    注意：请参考工作日早高峰 8:30 的平均情况。
     """
     try:
         response = model.generate_content(prompt)
-        # 提取 JSON 块
-        match = re.search(r'\{.*\}', response.text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
+        # 强力清洗：只提取 JSON 部分
+        clean_text = re.search(r'\{.*\}', response.text, re.DOTALL).group()
+        return json.loads(clean_text)
     except Exception as e:
-        st.sidebar.error(f"AI 查询出错: {e}")
-    return None
+        st.sidebar.error(f"解析失败: {e}")
+        return None
 
-# --- 3. UI 界面布局 ---
+# --- 4. 网页 UI 布局 ---
 st.title("🗼 东京生活成本 AI 计算器")
-st.markdown("通过 AI 自动评估不同房源的**通勤成本**与**生活总支出**。")
+st.caption(f"当前 AI 引擎: {model_name}")
 
-# 初始化 session_state 存储房源数据
+# 初始化房源数据表
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(columns=[
         "房源名称", "月房租(円)", "管理费(円)", "水电网(估)", 
         "食费/生活", "单程时间(分)", "单程票价(円)", "路线概要", "每周天数"
     ])
 
-# --- 4. 交互输入区 ---
+# A. 数据输入区
 with st.container(border=True):
-    st.subheader("🤖 AI 自动数据录入")
+    st.subheader("🤖 AI 自动分析录入")
     c1, c2, c3 = st.columns([2, 2, 1])
     
     with c1:
-        start_pt = st.text_input("🏠 房源位置（车站名或地标）", placeholder="例：新大久保")
+        start_pt = st.text_input("🏠 房源位置 (例: 新大久保)", placeholder="输入车站名")
     with c2:
-        end_pt = st.text_input("🏢 目的地（学校/公司）", placeholder="例：早稻田大学")
+        end_pt = st.text_input("🏢 目的地 (例: 早稻田大学)", placeholder="输入学校或公司名")
     with c3:
-        rent = st.number_input("💰 房租(円)", value=85000, step=1000)
+        rent_input = st.number_input("💰 预估月租(円)", value=85000, step=1000)
         
-    if st.button("🚀 询问 AI 并添加到对比表", use_container_width=True):
+    if st.button("🚀 询问 AI 并自动填表", use_container_width=True):
         if start_pt and end_pt:
-            with st.spinner("Gemini 正在分析电车数据..."):
+            with st.spinner("AI 正在计算通勤方案..."):
                 res = ask_ai_transit(start_pt, end_pt)
                 if res:
-                    new_data = {
+                    new_row = {
                         "房源名称": f"{start_pt}附近",
-                        "月房租(円)": rent,
+                        "月房租(円)": rent_input,
                         "管理费(円)": 5000,
                         "水电网(估)": 15000,
                         "食费/生活": 45000,
@@ -82,40 +112,42 @@ with st.container(border=True):
                         "路线概要": res["route"],
                         "每周天数": 5
                     }
-                    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_data])], ignore_index=True)
-                    st.success(f"已获取：从 {start_pt} 到 {end_pt} 大约需 {res['duration']} 分钟")
+                    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+                    st.success(f"已录入：{res['route']}，约 {res['duration']} 分钟")
+                else:
+                    st.warning("⚠️ AI 无法获取该路线，请手动录入。")
 
-# --- 5. 数据编辑与计算区 ---
+# B. 数据编辑区
 st.subheader("📋 房源对比清单")
-# 允许用户手动微调 AI 给出的数据
 edited_df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
 st.session_state.df = edited_df
 
+# C. 汇总分析区
 if not edited_df.empty:
-    # --- 计算逻辑 ---
-    calc_df = edited_df.copy().fillna(0)
-    # 月通勤次数：每周天数 * 4.33周 * 2 (往返)
-    calc_df["月通勤费"] = calc_df["单程票价(円)"] * calc_df["每周天数"] * 4.33 * 2
-    calc_df["月固定成本"] = calc_df["月房租(円)"] + calc_df["管理费(円)"] + calc_df["水电网(估)"] + calc_df["食费/生活"]
-    calc_df["预计月总支出"] = calc_df["月固定成本"] + calc_df["月通勤费"]
-    
     st.divider()
+    # 数据深拷贝用于计算
+    calc_df = edited_df.copy().fillna(0)
     
-    # --- 6. 最终可视化可视化分析 ---
-    st.subheader("📊 汇总分析结果")
+    # 核心计算逻辑：月度成本汇总
+    calc_df["月通勤费"] = calc_df["单程票价(円)"] * calc_df["每周天数"] * 4.33 * 2
+    calc_df["固定支出"] = calc_df["月房租(円)"] + calc_df["管理费(円)"] + calc_df["水电网(估)"] + calc_df["食费/生活"]
+    calc_df["月度总支出"] = calc_df["固定支出"] + calc_df["月通勤费"]
     
-    # 展示格式化的汇总表
-    summary_df = calc_df[["房源名称", "预计月总支出", "月房租(円)", "月通勤费", "单程时间(分)", "路线概要"]].sort_values("预计月总支出")
-    st.dataframe(summary_df.style.highlight_min(subset=["预计月总支出"], color="#D4EDDA"), use_container_width=True)
-
-    # 支出构成对比图
-    st.bar_chart(data=calc_df, x="房源名称", y="预计月总支出", color="#FF4B4B")
+    st.subheader("📊 月度财务支出对比")
     
-    with st.expander("📝 计算备注"):
-        st.write("""
-        1. **月度换算**：按每月平均 4.33 周计算。
-        2. **生活费基数**：默认水电网 1.5w，食费/生活 4.5w，可根据实际情况在表格中修改。
-        3. **AI 准确性**：AI 基于模型训练数据估算，建议对于最终选定的路线在 Google Maps 再次确认。
-        """)
+    # 结果展示
+    display_df = calc_df[["房源名称", "月度总支出", "月房租(円)", "月通勤费", "单程时间(分)", "路线概要"]]
+    st.dataframe(
+        display_df.sort_values("月度总支出").style.highlight_min(subset=["月度总支出"], color="#d4edda"),
+        use_container_width=True
+    )
+    
+    # 图表分析
+    st.bar_chart(data=calc_df, x="房源名称", y="月度总支出", color="#FF4B4B")
+    
+    with st.expander("📝 计算规则说明"):
+        st.write("1. **月度计算**：按每月 4.33 周计算，单程票价乘往返(2)。")
+        st.write("2. **AI 逻辑**：数据由 Gemini AI 基于训练集提供，可能存在几十日元的误差。")
+        st.write("3. **修改数据**：直接双击表格中的数字即可修改，所有图表会同步更新。")
 else:
-    st.info("请在上方输入房源位置和目的地，点击按钮开始分析。")
+    st.info("💡 请在上方输入房源和目的地，点击按钮让 AI 帮你计算成本。")
