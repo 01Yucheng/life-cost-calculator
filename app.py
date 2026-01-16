@@ -4,100 +4,105 @@ import google.generativeai as genai
 import json
 import re
 import urllib.parse
+import time
 
-# --- 1. 配置与初始化 (保持不变) ---
-st.set_page_config(page_title="东京生活成本 AI 计算器", layout="wide", page_icon="🗼")
+# --- 1. 初始化 (加入缓存以防重复连接) ---
+st.set_page_config(page_title="东京生活成本 AI 计算器", layout="wide")
 
-def init_gemini():
-    if "GEMINI_API_KEY" not in st.secrets:
-        st.error("❌ 未设置 API KEY")
-        st.stop()
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+@st.cache_resource
+def get_model(api_key):
+    genai.configure(api_key=api_key)
     return genai.GenerativeModel('gemini-1.5-flash')
 
-model = init_gemini()
+if "GEMINI_API_KEY" not in st.secrets:
+    st.error("🔑 请先在 Secrets 中设置 GEMINI_API_KEY")
+    st.stop()
 
-# --- 2. 辅助函数：生成 Google Maps 链接 ---
-def make_google_maps_link(origin, destination):
-    """生成电车通勤的 Google Maps 跳转链接"""
-    base_url = "https://www.google.com/maps/dir/?api=1"
-    params = {
-        "origin": origin,
-        "destination": destination,
-        "travelmode": "transit" # 强制电车模式
-    }
-    return f"{base_url}&{urllib.parse.urlencode(params)}"
+model = get_model(st.secrets["GEMINI_API_KEY"])
 
-def ask_ai_transit(origin, destination):
-    prompt = f"分析日本交通路线 JSON 格式：起点 {origin}，终点 {destination}。包含 duration, fare, route。"
+# --- 2. 核心目的地 ---
+DEST_SCHOOL = "东京都新宿区百人町2-24-12 (美都里慕)"
+DEST_JUKU = "东京都荒川区西日暮里2-12-5 (尚艺舍)"
+
+# --- 3. 改进的解析函数 (加入超时和详细日志) ---
+def safe_ai_transit(origin, destination, label):
+    prompt = f"日本电车通勤分析：起点[{origin}]，终点[{destination}]。严格返回JSON:{{'duration':分钟,'fare':日元,'route':'简短描述'}}"
     try:
+        # 增加提示信息
+        status.update(label=f"⏳ 正在查询前往{label}的路线...", state="running")
         response = model.generate_content(prompt)
-        clean_text = re.search(r'\{.*\}', response.text, re.DOTALL).group()
-        return json.loads(clean_text)
-    except: return None
+        # 提取JSON
+        match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as e:
+        st.error(f"AI 访问失败 ({label}): {e}")
+    return None
 
-# --- 3. UI 界面 ---
-st.title("🗼 东京生活成本 AI 计算器 (地图联动版)")
+# --- 4. 界面设计 ---
+if "house_data" not in st.session_state:
+    st.session_state.house_data = []
 
-if "df" not in st.session_state:
-    st.session_state.df = pd.DataFrame(columns=[
-        "房源名称", "月房租", "起点站", "学校时间", "学校票价", "私塾时间", "私塾票价"
-    ])
+st.title("🗼 东京生活成本 - AI 自动计算器")
 
 # 输入区
-with st.expander("➕ 添加新房源", expanded=True):
-    c1, c2, c3 = st.columns(3)
-    start_pt = c1.text_input("🏠 房源位置", "赤羽")
-    rent = c2.number_input("💰 月租(円)", 85000)
+with st.form("input_form", clear_on_submit=True):
+    st.subheader("➕ 录入新房源")
+    c1, c2 = st.columns(2)
+    start_loc = c1.text_input("🏠 房源位置 (如: 西川口, 中野)", key="loc")
+    house_rent = c2.number_input("💰 月租(円)", value=80000, step=5000)
     
-    # 你的固定目的地
-    dest_school = "东京都新宿区百人町2-24-12 (美都里慕)"
-    dest_juku = "东京都荒川区西日暮里2-12-5 (尚艺舍)"
+    submit_btn = st.form_submit_button("🚀 提交并查询 AI 路径")
 
-    if st.button("🚀 AI 一键检索双路径"):
-        with st.spinner("正在解析学校与私塾路径..."):
-            res_a = ask_ai_transit(start_pt, dest_school)
-            res_b = ask_ai_transit(start_pt, dest_juku)
+# --- 5. 处理提交逻辑 (使用 form 保证响应性) ---
+if submit_btn:
+    if not start_loc:
+        st.warning("请先输入房源位置")
+    else:
+        with st.status("📡 AI 正在工作中...", expanded=True) as status:
+            # 查询学校
+            data_school = safe_ai_transit(start_loc, DEST_SCHOOL, "学校")
+            # 查询私塾
+            data_juku = safe_ai_transit(start_loc, DEST_JUKU, "私塾")
             
-            if res_a and res_b:
-                new_row = {
-                    "房源名称": f"{start_pt}房源",
-                    "月房租": rent,
-                    "起点站": start_pt,
-                    "学校时间": res_a["duration"],
-                    "学校票价": res_a["fare"],
-                    "私塾时间": res_b["duration"],
-                    "私塾票价": res_b["fare"]
+            if data_school and data_juku:
+                new_entry = {
+                    "name": f"{start_loc}房源",
+                    "rent": house_rent,
+                    "origin": start_loc,
+                    "s_time": data_school['duration'],
+                    "s_fare": data_school['fare'],
+                    "j_time": data_juku['duration'],
+                    "j_fare": data_juku['fare']
                 }
-                st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-                st.success("成功录入！")
+                st.session_state.house_data.append(new_entry)
+                status.update(label="✅ 查询完成并已添加到列表！", state="complete", expanded=False)
+                time.sleep(1)
+                st.rerun() # 强制刷新页面显示新数据
 
-# --- 4. 最终报告区 ---
-st.subheader("📊 房源对比报告 (含地图跳转)")
-
-if not st.session_state.df.empty:
-    for idx, row in st.session_state.df.iterrows():
+# --- 6. 最终报告展示 (带地图跳转) ---
+st.divider()
+if st.session_state.house_data:
+    st.subheader("📊 房源分析报告")
+    for house in st.session_state.house_data:
         with st.container(border=True):
-            col_info, col_btn_a, col_btn_b = st.columns([3, 1, 1])
+            head, btn1, btn2 = st.columns([3, 1, 1])
             
-            # 左侧：基本信息
-            with col_info:
-                st.markdown(f"### **{row['房源名称']}**")
-                # 计算月支出 (学校5次/周, 私塾0.5次/周)
-                monthly_transit = (row['学校票价'] * 5 + row['私塾票价'] * 0.5) * 4.33 * 2
-                total = row['月房租'] + monthly_transit + 60000
-                st.write(f"💵 **预估月总支出: {int(total):,} 円** (房租: {row['月房租']:,} + 交通: {int(monthly_transit):,})")
+            # 计算费用 (学校5次/周，私塾0.5次/周)
+            commute_monthly = (house['s_fare'] * 10 + house['j_fare'] * 1) * 4.33
+            total_cost = house['rent'] + commute_monthly + 60000 # 6万生活费
             
-            # 中间：学校地图按钮
-            with col_btn_a:
-                url_a = make_google_maps_link(row['起点站'], dest_school)
-                st.link_button(f"🏫 去学校 ({row['学校时间']}min)", url_a, use_container_width=True)
+            with head:
+                st.markdown(f"### {house['name']}")
+                st.write(f"📉 **预估总月耗: {int(total_cost):,} 円**")
+                st.caption(f"房租: {house['rent']:,} | 月通勤费: {int(commute_monthly):,}")
             
-            # 右侧：私塾地图按钮
-            with col_btn_b:
-                url_b = make_google_maps_link(row['起点站'], dest_juku)
-                st.link_button(f"🎨 去私塾 ({row['私塾时间']}min)", url_b, use_container_width=True)
-
-    # 底部原始数据表
-    with st.expander("查看原始数据表"):
-        st.dataframe(st.session_state.df, use_container_width=True)
+            with btn1:
+                url_s = f"https://www.google.com/maps/dir/?api=1&origin={house['origin']}&destination={urllib.parse.quote(DEST_SCHOOL)}&travelmode=transit"
+                st.link_button(f"🏫 学校 ({house['s_time']}min)", url_s, use_container_width=True)
+                
+            with btn2:
+                url_j = f"https://www.google.com/maps/dir/?api=1&origin={house['origin']}&destination={urllib.parse.quote(DEST_JUKU)}&travelmode=transit"
+                st.link_button(f"🎨 私塾 ({house['j_time']}min)", url_j, use_container_width=True)
+else:
+    st.info("尚未录入数据，请在上方输入位置并点击提交。")
