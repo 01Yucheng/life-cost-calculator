@@ -1,6 +1,7 @@
 streamlit
 pandas
 google-generativeai
-pytz
 st-gsheets-connection
 gspread
+Pillow
+
