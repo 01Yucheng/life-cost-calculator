@@ -64,10 +64,18 @@ def get_transit_ai(origin, destination):
     )
     try:
         response = model.generate_content(prompt)
+        # 调试信息：如果没反应，先看看 AI 到底说了什么
+        # st.write(f"AI Response: {response.text}") 
+        
         clean_text = re.sub(r'```json|```', '', response.text).strip()
         match = re.search(r'\{.*\}', clean_text, re.DOTALL)
-        return json.loads(match.group()) if match else None
-    except:
+        if match:
+            return json.loads(match.group())
+        else:
+            st.error(f"AI 返回格式错误: {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"AI 调用失败: {str(e)}")
         return None
 
 def img_to_base64(img_file):
@@ -183,3 +191,4 @@ if not edited_df.empty:
         st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
         save_data_to_github(st.session_state.df_houses)
         st.rerun()
+
