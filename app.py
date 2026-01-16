@@ -1,13 +1,8 @@
 # app.py
-# 生活成本网页小程序（Streamlit）
-# 功能：租金+通勤成本+通勤时间；支持“输入地址 -> 自动生成通勤时间/票价（若返回）”
-# 修复：使用日本时区 JST 生成正确 departure_time（避免云端UTC导致 ZERO_RESULTS）
-#
+# Streamlit 生活成本计算器 + 地址/站名 -> 自动通勤（公共交通）
+# 稳定版：先 Geocoding 成经纬度，再 Directions(transit)（大幅减少 ZERO_RESULTS）
 # 运行：streamlit run app.py
-# requirements.txt:
-#   streamlit
-#   pandas
-#   requests
+# requirements.txt: streamlit, pandas, requests
 
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -23,7 +18,6 @@ st.caption("提示：通勤时间建议按“门到门”（走路+等车+换乘
 def money(v: float) -> str:
     return f"¥{v:,.0f}"
 
-
 # =========================
 # Sidebar: 全局参数
 # =========================
@@ -38,52 +32,84 @@ with st.sidebar:
         time_value = st.number_input("你的时间价值（日元/小时）", min_value=0, value=1500, step=100)
 
     st.divider()
+    debug = st.toggle("显示调试信息（排查 ZERO_RESULTS 用）", value=False)
     st.caption("若你用月票：可把单程费用填成 月票 /（通勤天数*2）")
 
 
 # =========================
-# Google Directions API（地址 -> 通勤）
+# Keys
 # =========================
 def get_google_api_key():
-    # 在 Streamlit Cloud 的 Secrets 中配置：
-    # GOOGLE_MAPS_API_KEY="你的key"
     try:
         return st.secrets["GOOGLE_MAPS_API_KEY"]
     except Exception:
         return None
 
 
-def _normalize_departure_ts_jst(depart_date: dt.date, depart_time: dt.time) -> int:
-    """
-    使用日本时区（JST）生成 departure_time 的 timestamp
-    并把分钟按 5 分钟取整，提升缓存命中率。
-    """
+# =========================
+# Time helper (JST)
+# =========================
+def departure_ts_jst(depart_date: dt.date, depart_time: dt.time) -> int:
     jst = ZoneInfo("Asia/Tokyo")
-
-    # 生成带时区的 datetime（关键：避免云端 UTC 误差）
     depart_dt = dt.datetime.combine(depart_date, depart_time).replace(tzinfo=jst)
 
-    # 5分钟取整：08:33 -> 08:35
+    # 5分钟取整（缓存更容易命中）
     minute = (depart_dt.minute // 5) * 5
-    depart_dt2 = depart_dt.replace(minute=minute, second=0, microsecond=0)
+    depart_dt = depart_dt.replace(minute=minute, second=0, microsecond=0)
 
-    return int(depart_dt2.timestamp())
+    return int(depart_dt.timestamp())
 
 
-@st.cache_data(ttl=60 * 60 * 24)  # 缓存 24 小时（可改：7天=60*60*24*7）
-def transit_commute_cached(origin: str, destination: str, departure_ts: int, api_key: str):
+# =========================
+# Geocoding (address -> lat,lng)
+# =========================
+@st.cache_data(ttl=60 * 60 * 24 * 7)  # 地点解析缓存 7 天（更省钱）
+def geocode_latlng(query: str, api_key: str):
     """
-    Google Directions API（公共交通）：
-    返回：单程分钟数、单程票价（若返回）、路线摘要summary
+    用 Geocoding API 把地址/站名转成经纬度。
+    """
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {
+        "address": query,
+        "region": "jp",
+        "language": "ja",
+        "key": api_key,
+    }
+    r = requests.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+
+    status = data.get("status")
+    if status != "OK":
+        err = data.get("error_message", "")
+        raise RuntimeError(f"Geocoding API 返回 {status}. {err}".strip())
+
+    result = data["results"][0]
+    loc = result["geometry"]["location"]
+    formatted = result.get("formatted_address", query)
+    return float(loc["lat"]), float(loc["lng"]), formatted
+
+
+# =========================
+# Directions (lat,lng -> transit)
+# =========================
+@st.cache_data(ttl=60 * 60 * 24)  # 路线缓存 24 小时
+def transit_directions_cached(origin_lat: float, origin_lng: float,
+                              dest_lat: float, dest_lng: float,
+                              departure_ts: int, api_key: str):
+    """
+    用 Directions API 计算公共交通路线（输入用经纬度，最稳）。
     """
     url = "https://maps.googleapis.com/maps/api/directions/json"
     params = {
-        "origin": origin,
-        "destination": destination,
+        "origin": f"{origin_lat},{origin_lng}",
+        "destination": f"{dest_lat},{dest_lng}",
         "mode": "transit",
         "departure_time": departure_ts,
         "language": "ja",
         "region": "jp",
+        # 你也可以试试强制 rail：
+        # "transit_mode": "rail",
         "key": api_key,
     }
 
@@ -94,6 +120,7 @@ def transit_commute_cached(origin: str, destination: str, departure_ts: int, api
     status = data.get("status")
     if status != "OK":
         err = data.get("error_message", "")
+        # 把最关键字段带回去方便调试
         raise RuntimeError(f"Directions API 返回 {status}. {err}".strip())
 
     route = data["routes"][0]
@@ -146,20 +173,21 @@ st.session_state.listings = edited
 st.divider()
 st.subheader("通勤自动计算（输入地址 → 自动生成通勤时间/票价）")
 
-api_key_present = get_google_api_key() is not None
+api_key = get_google_api_key()
+api_key_present = api_key is not None
+
 if not api_key_present:
     st.warning(
         "未检测到 GOOGLE_MAPS_API_KEY。\n"
-        "如果你部署在 Streamlit Cloud：到 App → Settings → Secrets 添加：\n"
+        "Streamlit Cloud：App → Settings → Secrets 添加：\n"
         'GOOGLE_MAPS_API_KEY="你的key"'
     )
 
 colA, colB = st.columns([1, 1])
 with colA:
-    origin_addr = st.text_input("出发地址（你住处）", value="", placeholder="例：浅草駅 / 東京都台東区浅草…")
+    origin_addr = st.text_input("出发（住处地址/车站名）", value="浅草駅")
 with colB:
-    default_dest = "新大久保駅"  # 默认更稳（站名不会翻车）
-    dest_addr = st.text_input("目的地（默认语校附近，可改）", value=default_dest)
+    dest_addr = st.text_input("目的地（默认语校附近，可改）", value="新大久保駅")
 
 colC, colD, colE = st.columns([1, 1, 1])
 with colC:
@@ -173,20 +201,24 @@ calc_btn = st.button("计算通勤（公共交通）", type="primary", disabled=
 
 if calc_btn:
     try:
-        if not origin_addr.strip():
-            st.error("请先填写出发地址。")
-        elif not dest_addr.strip():
-            st.error("请先填写目的地地址。")
+        if not origin_addr.strip() or not dest_addr.strip():
+            st.error("请填写出发和目的地。")
         else:
-            api_key = get_google_api_key()
-            departure_ts = _normalize_departure_ts_jst(depart_date, depart_time)
+            # 为了提高站名识别率，自动补“東京都/日本”
+            origin_q = origin_addr.strip()
+            dest_q = dest_addr.strip()
+            if "日本" not in origin_q and "Tokyo" not in origin_q and "東京都" not in origin_q:
+                origin_q = origin_q + " 東京都 日本"
+            if "日本" not in dest_q and "Tokyo" not in dest_q and "東京都" not in dest_q:
+                dest_q = dest_q + " 東京都 日本"
 
-            minutes, fare_jpy, summary = transit_commute_cached(
-                origin_addr.strip(),
-                dest_addr.strip(),
-                departure_ts,
-                api_key,
-            )
+            # 1) Geocode
+            o_lat, o_lng, o_fmt = geocode_latlng(origin_q, api_key)
+            d_lat, d_lng, d_fmt = geocode_latlng(dest_q, api_key)
+
+            # 2) Directions
+            ts = departure_ts_jst(depart_date, depart_time)
+            minutes, fare_jpy, summary = transit_directions_cached(o_lat, o_lng, d_lat, d_lng, ts, api_key)
 
             st.success(f"✅ 单程通勤时间：{minutes} 分钟")
             if fare_jpy is not None:
@@ -197,18 +229,25 @@ if calc_btn:
             if summary:
                 st.caption(f"路线摘要：{summary}")
 
-            # 写回表格指定行
+            if debug:
+                st.write("解析到的出发地：", o_fmt)
+                st.write("解析到的目的地：", d_fmt)
+                st.write("出发时间戳（JST取整后）：", ts)
+
+            # 写回表格
             idx = int(target_row) - 1
             if 0 <= idx < len(st.session_state.listings):
                 st.session_state.listings.loc[idx, "单程通勤时间(分钟)"] = minutes
                 if fare_jpy is not None:
                     st.session_state.listings.loc[idx, "单程通勤费用(日元)"] = float(fare_jpy)
-                st.success(f"✅ 已写入到第 {target_row} 行（表格会自动更新）")
+                st.success(f"✅ 已写入到第 {target_row} 行")
             else:
                 st.warning("行号超出范围：请先在上面表格添加足够的房源行。")
 
     except Exception as e:
         st.error(str(e))
+        if debug:
+            st.info("如果仍是 ZERO_RESULTS：请把出发/目的地换成更具体地址或站名（如：浅草駅(東京) / 新大久保駅）。")
 
 
 # =========================
@@ -223,9 +262,8 @@ def calc_row(row, commute_days, trips_per_day, time_value):
         + float(row["餐饮买菜(月/日元)"])
         + float(row["其他(月/日元)"])
     )
-
     commute_cost = float(row["单程通勤费用(日元)"]) * trips_per_day * commute_days
-    money_total = fixed + commute_cost
+    money_total = fixed (commute_cost)
 
     commute_minutes = float(row["单程通勤时间(分钟)"]) * trips_per_day * commute_days
     commute_hours = commute_minutes / 60.0
@@ -280,14 +318,6 @@ df_show["通勤时间/月(小时)"] = df_show["通勤时间/月(小时)"].apply(
 
 st.caption(f"当前按「{sort_col}」从低到高排序。")
 st.dataframe(df_show, use_container_width=True, hide_index=True)
-
-if time_value is not None:
-    hours_saved = (10 * trips_per_day * commute_days) / 60.0
-    value = hours_saved * float(time_value)
-    st.info(
-        f"小结：如果单程通勤少 10 分钟，你每月大约省 {hours_saved:.1f} 小时，"
-        f"按你的时间价值约等于 {money(value)}。"
-    )
 
 st.subheader("导出")
 csv = df_sorted.to_csv(index=False).encode("utf-8-sig")
