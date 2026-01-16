@@ -19,7 +19,7 @@ def init_ai():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target = "models/gemini-1.5-flash"
+        target = "models/gemini-3-flash"
         return genai.GenerativeModel(target if target in models else models[0])
     except Exception as e:
         st.error(f"AI 初始化失败: {e}")
@@ -226,3 +226,4 @@ if not edited_df.empty:
     if st.button("🗑️ 清空所有数据"):
         st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
         st.rerun()
+
