@@ -17,7 +17,7 @@ def init_ai():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target = "models/gemini-1.5-flash"
+        target = "models/gemini-3-flash"
         return genai.GenerativeModel(target if target in models else models[0])
     except Exception as e:
         st.error(f"AI 初始化失败: {e}")
@@ -29,7 +29,7 @@ model = init_ai()
 def get_transit(origin, destination):
     """AI 交通解析函数 - 整合了更健壮的 JSON 提取逻辑"""
     prompt = (
-        f"作为日本交通专家，请分析基于谷歌地图的数据从[{origin}]到[{destination}]的通勤。"
+        f"作为日本交通专家，请分析基于谷歌地图的数据从[{origin}]到[{destination}]的综合通勤。"
         f"请返回且仅返回一个 JSON 对象，格式如下：\n"
         f"{{\"mins\": 整数, \"yen\": 单程票价整数, \"pass_month\": 一个月定期券预估价格整数, \"line\": \"路线简称\"}}\n"
         f"注意：定期券价格约为单程的15-20倍。不要输出任何 Markdown 标签或解释文字。"
@@ -173,4 +173,5 @@ if not edited_df.empty:
     if st.button("🗑️ 清空所有数据"):
         st.session_state.df_houses = pd.DataFrame(columns=st.session_state.df_houses.columns)
         st.rerun()
+
 
