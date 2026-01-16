@@ -62,14 +62,46 @@ def process_and_compress_img(uploaded_file):
     img.save(buf, format="JPEG", quality=75)
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def get_ai_commute(loc, s_dest, j_dest):
-    """AI 直接分析通勤时间"""
-    prompt = f"分析日本交通并返回JSON:起点[{loc}]到终点1[{s_dest}]和2[{j_dest}]。格式:{{'s_yen':整数,'j_yen':整数,'s_mins':整数,'j_mins':整数}}"
+def get_ai_transit(loc, s_dest, j_dest):
+    """
+    模拟 Google Maps API 逻辑分析真实通勤数据
+    """
+    prompt = f"""
+    你现在是 Google Maps 交通分析专家。请根据 2024 年最新的日本铁道和巴士数据，分析以下通勤路线。
+    
+    起点: {loc}
+    终点1 (学校): {s_dest}
+    终点2 (私塾): {j_dest}
+    
+    请检索以下信息：
+    1. 从起点到终点1的最快通勤时间（分钟）和标准单程票价（日元）。
+    2. 从起点到终点2的最快通勤时间（分钟）和标准单程票价（日元）。
+    
+    注意：
+    - 优先考虑 JR、东京地下铁或私铁线路。
+    - 必须包含步行到车站的时间。
+    - 必须以严格的 JSON 格式返回，不得有任何额外描述。
+    
+    返回格式示例：
+    {{
+        "s_yen": 220,
+        "j_yen": 310,
+        "s_mins": 25,
+        "j_mins": 18
+    }}
+    """
     try:
+        # 调用 Gemini 模型
         res = model.generate_content(prompt)
-        data = json.loads(re.search(r'\{.*\}', res.text, re.DOTALL).group())
-        return data
-    except:
+        # 使用正则提取 JSON 部分，防止 AI 返回多余的 Markdown 标记
+        json_match = re.search(r'\{.*\}', res.text, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group())
+            return data
+        else:
+            raise ValueError("未找到有效的 JSON 数据")
+    except Exception as e:
+        st.warning(f"AI 交通检索提示: 无法获取实时数据，已使用预估值。错误: {e}")
         return {"s_yen": 200, "j_yen": 200, "s_mins": 30, "j_mins": 30}
 
 # --- 5. UI: 侧边栏与录入 ---
@@ -150,3 +182,4 @@ if not st.session_state.df_houses.empty:
                         storage.save_data(st.session_state.df_houses)
                         st.rerun()
         except: continue
+
