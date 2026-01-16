@@ -1,7 +1,6 @@
-streamlit
+PyGithub
 pandas
 google-generativeai
-st-gsheets-connection
-gspread
 Pillow
+
 
