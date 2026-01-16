@@ -27,6 +27,7 @@ model = init_ai()
 
 # --- 2. 工具函数 ---
 def get_transit(origin, destination):
+    """AI 交通解析函数"""
     prompt = f"日本交通分析 JSON：起点[{origin}]，终点[{destination}]。返回:{{'mins':整数,'yen':整数,'line':'简述'}}"
     try:
         response = model.generate_content(prompt)
@@ -37,34 +38,30 @@ def get_transit(origin, destination):
         return None
 
 def img_to_base64(img_file):
+    """处理拖入图片的 Base64 转换"""
     return f"data:image/png;base64,{base64.b64encode(img_file.getvalue()).decode()}"
 
 # --- 3. UI 界面 ---
 st.title("🗼 东京生活成本 AI 计算器")
 
-# A. 侧边栏参数设置
+# A. 侧边栏：核心参数与目的地
 with st.sidebar:
-    st.header("⚙️ 参数与目的地设置")
-    
-    st.subheader("📍 目的地设置")
-    dest_school = st.text_input("学校地址/车站", value="东京都新宿区百人町2-24-12 (美都里慕)")
-    dest_juku = st.text_input("私塾地址/车站", value="东京都荒川区西日暮里2-12-5 (尚艺舍)")
-    
+    st.header("⚙️ 设置")
+    dest_school = st.text_input("🏫 学校地址/车站", value="东京都新宿区百人町2-24-12 (美都里慕)")
+    dest_juku = st.text_input("🎨 私塾地址/车站", value="东京都荒川区西日暮里2-12-5 (尚艺舍)")
     st.divider()
-    
-    st.subheader("💰 支出权重设置")
-    base_living = st.number_input("🍔 月固定生活费 (食费/杂费)", value=60000, step=5000)
+    base_living = st.number_input("🍔 月固定生活费", value=60000, step=5000)
     days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
     days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
 
-# 初始化数据表
+# 初始化 Session State 数据结构
 if "df_houses" not in st.session_state:
     st.session_state.df_houses = pd.DataFrame(columns=[
         "房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学时(分)", "学费(单程)", "塾时(分)", "塾费(单程)", "线路概要"
     ])
 
-# B. AI 输入区
-with st.expander("🤖 录入新房源", expanded=True):
+# B. AI 输入与图片拖拽区
+with st.expander("➕ 录入新房源 (可拖入照片)", expanded=True):
     c1, c2 = st.columns([2, 1])
     with c1:
         n_col, l_col, r_col = st.columns([1.5, 1.5, 1])
@@ -75,9 +72,9 @@ with st.expander("🤖 录入新房源", expanded=True):
     with c2:
         uploaded_file = st.file_uploader("🖼️ 拖入房源照片", type=['png', 'jpg', 'jpeg'])
 
-    if st.button("🚀 AI 自动分析并添加到清单", use_container_width=True):
+    if st.button("🚀 AI 自动计算并添加", use_container_width=True):
         if loc_in:
-            with st.spinner(f"正在分析路径..."):
+            with st.spinner("AI 正在计算最佳路径..."):
                 s_data = get_transit(loc_in, dest_school)
                 j_data = get_transit(loc_in, dest_juku)
                 img_data = img_to_base64(uploaded_file) if uploaded_file else ""
@@ -98,7 +95,7 @@ with st.expander("🤖 录入新房源", expanded=True):
                     st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_row], ignore_index=True)
                     st.rerun()
 
-# C. 可编辑表格区
+# C. 数据清单表 (双击可修改)
 st.subheader("📝 房源数据清单")
 edited_df = st.data_editor(
     st.session_state.df_houses, 
@@ -106,52 +103,55 @@ edited_df = st.data_editor(
     use_container_width=True,
     column_config={
         "房源图片": st.column_config.ImageColumn("预览"),
+        "月房租(円)": st.column_config.NumberColumn(format="%d"),
     },
     key="house_editor_final"
 )
 st.session_state.df_houses = edited_df
 
-# D. 导出功能区
+# D. 房源开销对比分析报告 (回归并修复)
 if not edited_df.empty:
-    st.subheader("📤 数据导出")
-    col_csv, col_pdf = st.columns(2)
-    
-    # 1. 导出 CSV (自动排除无法导出的图片Base64字符串以减小文件体积)
-    csv_data = edited_df.drop(columns=["房源图片"]).to_csv(index=False).encode('utf-8-sig')
-    col_csv.download_button(
-        label="📥 下载 CSV 数据表 (Excel可用)",
-        data=csv_data,
-        file_name="tokyo_living_cost.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
-    
-    # 2. 导出 PDF 说明
-    col_pdf.info("💡 提示：按 **Ctrl + P** (Windows) 或 **Cmd + P** (Mac) 即可将此网页完整保存为 PDF。")
-
     st.divider()
-
-    # E. 最终对比报告
     st.subheader("📊 房源开销对比分析报告")
+    
+    # 导出按钮
+    csv_data = edited_df.drop(columns=["房源图片"]).to_csv(index=False).encode('utf-8-sig')
+    st.download_button("📥 下载数据表 (CSV)", csv_data, "tokyo_living.csv", "text/csv")
+
     for idx, row in edited_df.iterrows():
         try:
-            commute_m = (float(row["学费(单程)"]) * 2 * days_school + float(row["塾费(单程)"]) * 2 * days_juku) * 4.33
-            total_m = float(row["月房租(円)"]) + float(row["管理费(円)"]) + commute_m + base_living
+            # 数据校验与计算
+            rent = float(row["月房租(円)"])
+            m_fee = float(row["管理费(円)"])
+            s_fare = float(row["学费(单程)"])
+            j_fare = float(row["塾费(单程)"])
+            
+            # 动态计算月度总支出
+            commute_m = (s_fare * 2 * days_school + j_fare * 2 * days_juku) * 4.33
+            total_m = rent + m_fee + commute_m + base_living
             
             with st.container(border=True):
                 img_c, info_c, btn_c = st.columns([1.5, 3, 1])
+                
                 with img_c:
                     if row["房源图片"]:
-                        st.image(row["房_图片"], use_container_width=True)
+                        st.image(row["房源图片"], use_container_width=True)
+                    else:
+                        st.caption("📷 暂无照片")
+                
                 with info_c:
                     st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
                     st.write(f"📉 **预估月总支出: {int(total_m):,} 円**")
-                    st.write(f"🏠 房租+管理: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 月通勤: {int(commute_m):,}")
+                    st.write(f"🏠 房租+管理: {int(rent+m_fee):,} | 🚇 月通勤: {int(commute_m):,}")
+                    st.caption(f"线路概要: {row['线路概要']}")
+                
                 with btn_c:
-                    map_api = "https://www.google.com/maps/dir/?api=1"
-                    url_s = f"{map_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
+                    map_url = "https://www.google.com/maps/dir/?api=1"
+                    url_s = f"{map_url}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
+                    url_j = f"{map_api if 'map_api' in locals() else map_url}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
                     st.link_button(f"🏫 学校地图", url_s, use_container_width=True)
-        except:
+                    st.link_button(f"🎨 私塾地图", url_j, use_container_width=True)
+        except Exception as e:
             continue
 
     if st.button("🗑️ 清空所有数据"):
