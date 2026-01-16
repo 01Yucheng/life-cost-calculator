@@ -28,15 +28,16 @@ class GitHubStorage:
             content = self.repo.get_contents(self.file_path)
             return pd.read_csv(io.StringIO(content.decoded_content.decode('utf-8-sig')))
         except:
-            return pd.DataFrame(columns=["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学费(单程)", "塾费(单程)", "线路概要"])
+            # 初始表头：删除了线路概要，新增了通勤时间
+            return pd.DataFrame(columns=["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "学费(单程)", "塾费(单程)", "通勤时间"])
 
     def save_data(self, df):
         csv_content = df.to_csv(index=False, encoding='utf-8-sig')
         try:
             contents = self.repo.get_contents(self.file_path)
-            self.repo.update_file(self.file_path, "update", csv_content, contents.sha)
+            self.repo.update_file(self.file_path, "update data", csv_content, contents.sha)
         except:
-            self.repo.create_file(self.file_path, "init", csv_content)
+            self.repo.create_file(self.file_path, "init data", csv_content)
 
 # --- 3. 初始化 ---
 storage = GitHubStorage()
@@ -54,23 +55,23 @@ model = init_ai()
 def process_and_compress_img(uploaded_file):
     """处理并压缩图片，兼容 PNG 透明色"""
     img = Image.open(uploaded_file)
-    # 核心修复：如果图片有透明通道(RGBA)，转换为 RGB，防止 JPEG 报错
+    # 核心修复：处理 PNG 透明通道导致的 OSError
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
     img.thumbnail((400, 400))
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=75) # 现在不会报错了
+    img.save(buf, format="JPEG", quality=75)
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 def get_ai_transit(loc, s_dest, j_dest):
-    """AI 分析真实线路"""
-    prompt = f"分析日本交通并返回JSON:起点[{loc}]到终点1[{s_dest}]和2[{j_dest}]。格式:{{'s_yen':整数,'j_yen':整数,'summary':'线路简述'}}"
+    """AI 分析通勤票价和时间"""
+    prompt = f"分析日本交通并返回JSON:起点[{loc}]到终点1[{s_dest}]和2[{j_dest}]。格式:{{'s_yen':整数,'j_yen':整数,'time_info':'描述通勤时长，如：学校20分/私塾15分'}}"
     try:
         res = model.generate_content(prompt)
         data = json.loads(re.search(r'\{.*\}', res.text, re.DOTALL).group())
         return data
     except:
-        return {"s_yen": 200, "j_yen": 200, "summary": "线路分析暂不可用"}
+        return {"s_yen": 200, "j_yen": 200, "time_info": "未能获取时间"}
 
 # --- 5. UI: 侧边栏与录入 ---
 with st.sidebar:
@@ -84,7 +85,7 @@ with st.sidebar:
 with st.expander("➕ 录入新房源", expanded=True):
     c1, c2 = st.columns([2, 1])
     with c1:
-        name_in = st.text_input("🏠 房源名称", placeholder="例如：张总的猫窝")
+        name_in = st.text_input("🏠 房源名称")
         loc_in = st.text_input("📍 车站名")
         rent_in = st.number_input("💰 预估月租", value=80000)
     with c2:
@@ -92,7 +93,7 @@ with st.expander("➕ 录入新房源", expanded=True):
 
     if st.button("🚀 AI 分析并保存", use_container_width=True):
         if loc_in:
-            with st.spinner("AI 正在分析线路并处理图片..."):
+            with st.spinner("AI 正在计算通勤时间..."):
                 transit = get_ai_transit(loc_in, dest_school, dest_juku)
                 img_data = process_and_compress_img(up_file) if up_file else ""
                 
@@ -104,7 +105,7 @@ with st.expander("➕ 录入新房源", expanded=True):
                     "管理费(円)": 5000,
                     "学费(单程)": transit['s_yen'],
                     "塾费(单程)": transit['j_yen'],
-                    "线路概要": transit['summary'] # 修复：不再是占位符
+                    "通勤时间": transit['time_info'] # 替换原本的路线概要
                 }])
                 st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_row], ignore_index=True)
                 storage.save_data(st.session_state.df_houses)
@@ -121,6 +122,7 @@ if not edited_df.equals(st.session_state.df_houses):
 if not st.session_state.df_houses.empty:
     st.divider()
     st.subheader("📊 房源对比报告")
+    # CSS：防止打印分页截断
     st.markdown('<style>@media print {.stContainer {page-break-inside: avoid;}}</style>', unsafe_allow_html=True)
 
     for idx, row in st.session_state.df_houses.iterrows():
@@ -136,13 +138,14 @@ if not st.session_state.df_houses.empty:
                     st.markdown(f"### {row['房源名称']} ({row['房源位置']})")
                     st.markdown(f"#### 💰 月支出: **{int(total_m):,} 円**")
                     st.write(f"🏠 房租: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 通勤: {int(fare_m):,}")
-                    st.caption(f"线路: {row['线路概要']}")
+                    # 显示 AI 填入的通勤时间
+                    st.info(f"⏱️ 通勤时间: {row['通勤时间']}")
                 with b_col:
                     m_api = "https://www.google.com/maps/dir/?api=1"
                     s_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
                     j_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
                     st.link_button("🏫 学校地图", s_url, use_container_width=True)
-                    st.link_button("🎨 私塾地图", j_url, use_container_width=True) # 补全按钮
+                    st.link_button("🎨 私塾地图", j_url, use_container_width=True) # 补全私塾按钮
                     if st.button("🗑️ 删除房源", key=f"del_{idx}", use_container_width=True):
                         st.session_state.df_houses = st.session_state.df_houses.drop(idx).reset_index(drop=True)
                         storage.save_data(st.session_state.df_houses)
