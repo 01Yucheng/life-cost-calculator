@@ -62,27 +62,57 @@ def process_and_compress_img(uploaded_file):
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 def get_ai_commute(loc, s_dest, j_dest):
-    """模拟 Google Maps 逻辑获取真实通勤数据"""
-    prompt = f"""
-    作为 Google Maps 交通分析专家，请根据 2024 年日本铁道数据分析以下路线：
-    起点: {loc}
-    终点1(学校): {s_dest}
-    终点2(私塾): {j_dest}
-    
-    请严格返回 JSON 格式（包含步行到车站的时间和标准票价）：
-    {{
-        "s_yen": 整数, 
-        "j_yen": 整数, 
-        "s_mins": 整数, 
-        "j_mins": 整数
-    }}
     """
+    强化版 AI 交通分析：模拟 Google Maps 真实数据返回
+    """
+    # 更加强硬的提示词，包含返回示例
+    prompt = f"""
+    你现在是 Google Maps 交通数据 API。请检索以下日本通勤路线的真实数据。
+    
+    起点车站: {loc}
+    终点1 (学校): {s_dest}
+    终点2 (私塾): {j_dest}
+    
+    任务要求:
+    1. 计算包含步行时间在内的最快通勤分钟数。
+    2. 计算标准的单程成人票价 (日元)。
+    3. 必须返回严格的 JSON 格式，严禁任何解释性文字。
+    
+    输出示例参考:
+    {{
+        "s_yen": 220,
+        "j_yen": 310,
+        "s_mins": 28,
+        "j_mins": 15
+    }}
+    
+    请根据 2024 年真实铁道数据直接输出结果：
+    """
+    
     try:
+        # 增加安全检查：如果用户没输入车站名，不调用 AI
+        if not loc or loc == "车站名":
+            return {"s_yen": 0, "j_yen": 0, "s_mins": 0, "j_mins": 0}
+            
         res = model.generate_content(prompt)
-        data = json.loads(re.search(r'\{.*\}', res.text, re.DOTALL).group())
-        return data
-    except:
-        return {"s_yen": 200, "j_yen": 200, "s_mins": 30, "j_mins": 30}
+        
+        # 增强解析能力：过滤掉 AI 可能返回的 ```json 标签
+        raw_text = res.text
+        json_str = re.search(r'\{.*\}', raw_text, re.DOTALL).group()
+        data = json.loads(json_str)
+        
+        # 验证返回字段是否完整
+        required_keys = ["s_yen", "j_yen", "s_mins", "j_mins"]
+        if all(key in data for key in required_keys):
+            return data
+        else:
+            raise ValueError("字段不完整")
+            
+    except Exception as e:
+        # 如果失败，在后台打印错误以便调试
+        print(f"AI 检索失败详情: {e}")
+        # 保持一个明显的错误值，方便您一眼看出 AI 没干活
+        return {"s_yen": 111, "j_yen": 111, "s_mins": 99, "j_mins": 99}
 
 # --- 5. UI: 侧边栏与录入 ---
 with st.sidebar:
@@ -163,3 +193,4 @@ if not st.session_state.df_houses.empty:
                         storage.save_data(st.session_state.df_houses)
                         st.rerun()
         except: continue
+
