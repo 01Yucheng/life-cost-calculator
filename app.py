@@ -178,33 +178,65 @@ def parse_route(data: dict) -> tuple[int, float | None, str]:
     return minutes, fare_jpy, summary
 
 
-def transit_route_with_retry(
+def routes_compute_transit(
     o_lat: float, o_lng: float,
     d_lat: float, d_lng: float,
     ts: int,
-    api_key: str
-) -> tuple[bool, dict, str]:
+    api_key: str,
+    time_mode: str,  # "departure" or "arrival"
+) -> dict:
     """
-    强制公共交通（TRANSIT）：
-    先 departureTime，再 arrivalTime 重试（仍然 TRANSIT）。
-    失败时把真实错误塞到 error_message，方便 UI 显示。
+    Routes API v2: computeRoutes (TRANSIT)
+    关键：把 HTTP 返回完整保留下来，方便排错
     """
-    data = routes_compute_transit(o_lat, o_lng, d_lat, d_lng, ts, api_key, time_mode="departure")
-    if data.get("routes"):
-        return True, data, "routes_transit_departure"
+    url = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
-    data2 = routes_compute_transit(o_lat, o_lng, d_lat, d_lng, ts, api_key, time_mode="arrival")
-    if data2.get("routes"):
-        return True, data2, "routes_transit_arrival"
+    field_mask = ",".join([
+        "routes.duration",
+        "routes.legs.duration",
+        "routes.travelAdvisory.transitFare",
+    ])
 
-    err = extract_error_message(data2)
-    if err:
-        data2["status"] = "ERROR"
-        data2["error_message"] = err
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": field_mask,
+    }
+
+    body = {
+        "origin": {"location": {"latLng": {"latitude": o_lat, "longitude": o_lng}}},
+        "destination": {"location": {"latLng": {"latitude": d_lat, "longitude": d_lng}}},
+        "travelMode": "TRANSIT",
+        "languageCode": "ja",
+        "regionCode": "JP",
+    }
+
+    when = dt.datetime.fromtimestamp(ts, tz=JST).isoformat()
+    if time_mode == "arrival":
+        body["arrivalTime"] = when
     else:
-        data2["status"] = "NO_ROUTES"
+        body["departureTime"] = when
 
-    return False, data2, "routes_transit_arrival"
+    r = requests.post(url, headers=headers, json=body, timeout=20)
+
+    # ✅ 不要直接 raise，让我们能看到真实返回
+    raw_text = r.text
+
+    try:
+        data = r.json()
+    except Exception:
+        data = {}
+
+    # ✅ 强制塞入调试信息（不会影响正常 routes 解析）
+    if not isinstance(data, dict):
+        data = {"_non_dict_json": str(data)}
+
+    data["_http_status"] = r.status_code
+    data["_raw_text"] = raw_text[:2000]  # 防止太长
+    data["_sent_body"] = body
+    data["_sent_field_mask"] = field_mask
+
+    return data
 
 
 def weighted_merge(
@@ -495,3 +527,4 @@ st.dataframe(df_show, use_container_width=True, hide_index=True)
 st.subheader("导出")
 csv = df_sorted.to_csv(index=False).encode("utf-8-sig")
 st.download_button("下载 CSV 结果", data=csv, file_name="生活成本对比.csv", mime="text/csv")
+
