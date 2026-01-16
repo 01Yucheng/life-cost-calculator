@@ -13,15 +13,18 @@ from PIL import Image
 st.set_page_config(page_title="东京生活成本 AI 计算器 Pro", layout="wide", page_icon="🗼")
 
 @st.cache_resource
-@st.cache_resource
 def init_ai():
     if "GEMINI_API_KEY" not in st.secrets:
-        st.error("🔑 缺失 API KEY")
+        st.error("🔑 未在 Secrets 中找到 GEMINI_API_KEY")
         st.stop()
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    
-    # 修复 404 错误：改用更通用的模型调用字符串
-    return genai.GenerativeModel("gemini-1.5-flash")
+    try:
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        target = "models/gemini-3-flash"
+        return genai.GenerativeModel(target if target in models else models[0])
+    except Exception as e:
+        st.error(f"AI 初始化失败: {e}")
+        st.stop()
 
 model = init_ai()
 
@@ -151,5 +154,6 @@ if not edited_df.empty:
                 st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
                 st.write(f"📈 **实际月均总支出: {int(item['total']):,}(円)**")
                 st.write(f"🏠 固定月开销: {int(item['base']):,} | 🔑 初期分摊: +{int(item['amort']):,}/月")
+
 
 
