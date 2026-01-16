@@ -46,13 +46,14 @@ if "df_houses" not in st.session_state:
 @st.cache_resource
 def init_ai():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    return genai.GenerativeModel("models/gemini-1.5-flash")
+    # 修复 404: 去掉 models/ 前缀
+    return genai.GenerativeModel("gemini-1.5-flash")
 
 model = init_ai()
 
 # --- 4. 功能函数 ---
 def process_and_compress_img(uploaded_file):
-    """处理图片并兼容 PNG 透明色，防止 OSError"""
+    """兼容 PNG 并压缩"""
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -62,56 +63,23 @@ def process_and_compress_img(uploaded_file):
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 def get_ai_commute(loc, s_dest, j_dest):
-    """
-    强化版 AI 交通分析：解决 404 错误并支持实时调试回显
-    """
-    prompt = f"""
-    你现在是 Google Maps 交通数据机器人。请分析日本通勤路线并严格返回 JSON。
-    起点: {loc}
-    终点1 (学校): {s_dest}
-    终点2 (私塾): {j_dest}
-    
-    必须返回以下格式的 JSON，禁止任何解释文字：
-    {{
-        "s_yen": 整数票价,
-        "j_yen": 整数票价,
-        "s_mins": 整数分钟,
-        "j_mins": 整数分钟
-    }}
-    """
-    
+    """强化解析与回显"""
+    prompt = f"分析日本交通并返回JSON:起点[{loc}]到终点1[{s_dest}]和2[{j_dest}]。格式:{{'s_yen':整数,'j_yen':整数,'s_mins':整数,'j_mins':整数}}"
     try:
-        if not loc or "车站名" in loc:
-            st.warning("⚠️ 请先输入车站名再进行分析")
-            return {"s_yen": 0, "j_yen": 0, "s_mins": 0, "j_mins": 0}
-
-        # 调用模型
         res = model.generate_content(prompt)
         raw_text = res.text
         
-        # --- 调试回显区域 ---
-        with st.expander("🔍 AI 返回原始数据调试", expanded=True):
-            st.code(raw_text, language="text")
-        
-        # 提取 JSON 核心内容
-        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-        if not json_match:
-            st.error(f"❌ AI 未返回 JSON。原始文本：{raw_text}")
-            raise ValueError("No JSON found")
+        # 调试回显
+        with st.expander("🔍 AI 原始数据回显"):
+            st.code(raw_text)
             
-        data = json.loads(json_match.group())
-        st.toast(f"✅ 解析成功: {data['s_mins']}分 / {data['j_mins']}分", icon="🚇")
+        data = json.loads(re.search(r'\{.*\}', raw_text, re.DOTALL).group())
         return data
-
     except Exception as e:
-        # 捕获并显示具体的错误信息，如 404 或格式错误
         st.error(f"🚨 交通计算出错: {str(e)}")
-        # 如果是 404 错误，提示用户检查 API Key 或模型名
-        if "404" in str(e):
-            st.info("💡 提示：模型路径已尝试自动修正，请确保您的 API Key 有权访问 Gemini 1.5 Flash。")
         return {"s_yen": 111, "j_yen": 111, "s_mins": 99, "j_mins": 99}
-        
-# --- 5. UI: 侧边栏与录入 ---
+
+# --- 5. UI: 输入区域 ---
 with st.sidebar:
     st.header("⚙️ 生活参数")
     base_living = st.number_input("🍔 月固定生活费", value=60000)
@@ -124,15 +92,14 @@ with st.expander("➕ 录入新房源", expanded=True):
     c1, c2 = st.columns([2, 1])
     with c1:
         name_in = st.text_input("🏠 房源名称")
-        loc_in = st.text_input("📍 车站名")
+        loc_in = st.text_input("📍 车站名(建议带'駅')") # 提高识别率
         rent_in = st.number_input("💰 预估月租", value=80000)
     with c2:
         up_file = st.file_uploader("🖼️ 房源照片", type=['jpg','jpeg','png'])
 
     if st.button("🚀 AI 分析并保存", use_container_width=True):
         if loc_in:
-            with st.spinner("AI 正在检索 Google Maps 交通数据..."):
-                # 修复调用名不一致的问题
+            with st.spinner("AI 正在计算..."):
                 commute = get_ai_commute(loc_in, dest_school, dest_juku)
                 img_data = process_and_compress_img(up_file) if up_file else ""
                 
@@ -154,17 +121,12 @@ with st.expander("➕ 录入新房源", expanded=True):
 
 # --- 6. 数据清单 ---
 st.subheader("📝 房源数据清单")
-edited_df = st.data_editor(st.session_state.df_houses, num_rows="dynamic", use_container_width=True)
-if not edited_df.equals(st.session_state.df_houses):
-    st.session_state.df_houses = edited_df
-    storage.save_data(edited_df)
+st.data_editor(st.session_state.df_houses, use_container_width=True)
 
-# --- 7. 对比报告卡片 ---
+# --- 7. 对比报告 ---
 if not st.session_state.df_houses.empty:
     st.divider()
     st.subheader("📊 房源对比报告")
-    st.markdown('<style>@media print {.stContainer {page-break-inside: avoid;}}</style>', unsafe_allow_html=True)
-
     for idx, row in st.session_state.df_houses.iterrows():
         try:
             fare_m = (float(row["学费(单程)"]) * 2 * days_school + float(row["塾费(单程)"]) * 2 * days_juku) * 4.33
@@ -180,17 +142,14 @@ if not st.session_state.df_houses.empty:
                     st.write(f"🏠 房租: {int(float(row['月房租(円)'])+float(row['管理费(円)'])):,} | 🚇 月通勤费: {int(fare_m):,}")
                     st.write(f"🕒 **{row['通勤时间']}**")
                 with b_col:
+                    # 地图链接补全
                     m_api = "https://www.google.com/maps/dir/?api=1"
                     s_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
                     j_url = f"{m_api}&origin={urllib.parse.quote(row['房源位置'])}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
                     st.link_button("🏫 学校地图", s_url, use_container_width=True)
                     st.link_button("🎨 私塾地图", j_url, use_container_width=True)
-                    if st.button("🗑️ 删除房源", key=f"del_{idx}", use_container_width=True):
+                    if st.button("🗑️ 删除", key=f"del_{idx}", use_container_width=True):
                         st.session_state.df_houses = st.session_state.df_houses.drop(idx).reset_index(drop=True)
                         storage.save_data(st.session_state.df_houses)
                         st.rerun()
         except: continue
-
-
-
-
