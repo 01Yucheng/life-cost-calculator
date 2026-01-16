@@ -63,20 +63,15 @@ def process_and_compress_img(uploaded_file):
 
 def get_ai_commute(loc, s_dest, j_dest):
     """
-    强化版 AI 交通分析函数：支持实时数据回显与格式容错
+    强化版 AI 交通分析：解决 404 错误并支持实时调试回显
     """
-    # 1. 构造强约束提示词
     prompt = f"""
     你现在是 Google Maps 交通数据机器人。请分析日本通勤路线并严格返回 JSON。
-    
     起点: {loc}
     终点1 (学校): {s_dest}
     终点2 (私塾): {j_dest}
     
-    要求：
-    - 检索 2024-2026 年真实铁道数据。
-    - 包含步行至车站的时间。
-    - 必须返回以下格式的 JSON，禁止任何解释文字：
+    必须返回以下格式的 JSON，禁止任何解释文字：
     {{
         "s_yen": 整数票价,
         "j_yen": 整数票价,
@@ -86,45 +81,36 @@ def get_ai_commute(loc, s_dest, j_dest):
     """
     
     try:
-        # 安全检查：防止空输入
         if not loc or "车站名" in loc:
             st.warning("⚠️ 请先输入车站名再进行分析")
             return {"s_yen": 0, "j_yen": 0, "s_mins": 0, "j_mins": 0}
 
-        # 2. 调用 Gemini API
+        # 调用模型
         res = model.generate_content(prompt)
         raw_text = res.text
         
-        # 3. 实时回显 AI 返回的原始数据（调试关键！）
-        with st.expander("🔍 AI 返回原始数据调试", expanded=False):
+        # --- 调试回显区域 ---
+        with st.expander("🔍 AI 返回原始数据调试", expanded=True):
             st.code(raw_text, language="text")
-            st.caption("如果上方显示非 JSON 文本，说明 AI 受到干扰或地址无法识别")
-
-        # 4. 灵活提取 JSON 核心内容
-        # 使用正则匹配最外层的花括号，防止 AI 返回 Markdown 代码块标签
+        
+        # 提取 JSON 核心内容
         json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
         if not json_match:
-            st.error(f"❌ AI 未返回有效的 JSON 结构。原始输出：{raw_text}")
+            st.error(f"❌ AI 未返回 JSON。原始文本：{raw_text}")
             raise ValueError("No JSON found")
             
         data = json.loads(json_match.group())
-        
-        # 5. 验证解析结果
-        required_keys = ["s_yen", "j_yen", "s_mins", "j_mins"]
-        if all(key in data for key in required_keys):
-            # 弹窗提示解析成功
-            st.toast(f"✅ 交通分析成功: {loc} -> {data['s_mins']}分/{data['j_mins']}分", icon="🚇")
-            return data
-        else:
-            st.error(f"❌ AI 返回字段缺失: {data}")
-            raise ValueError("Incomplete data")
+        st.toast(f"✅ 解析成功: {data['s_mins']}分 / {data['j_mins']}分", icon="🚇")
+        return data
 
     except Exception as e:
-        # 6. 异常情况下的可视化反馈
+        # 捕获并显示具体的错误信息，如 404 或格式错误
         st.error(f"🚨 交通计算出错: {str(e)}")
-        # 返回 99 分以便在界面上明显识别出错误数据
+        # 如果是 404 错误，提示用户检查 API Key 或模型名
+        if "404" in str(e):
+            st.info("💡 提示：模型路径已尝试自动修正，请确保您的 API Key 有权访问 Gemini 1.5 Flash。")
         return {"s_yen": 111, "j_yen": 111, "s_mins": 99, "j_mins": 99}
-
+        
 # --- 5. UI: 侧边栏与录入 ---
 with st.sidebar:
     st.header("⚙️ 生活参数")
@@ -204,6 +190,7 @@ if not st.session_state.df_houses.empty:
                         storage.save_data(st.session_state.df_houses)
                         st.rerun()
         except: continue
+
 
 
 
