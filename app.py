@@ -21,7 +21,7 @@ def init_ai():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     
     # 修复 404 错误：改用更通用的模型调用字符串
-    return genai.GenerativeModel("gemini-1.5-flash"
+    return genai.GenerativeModel("gemini-1.5-flash")
 
 model = init_ai()
 
@@ -151,4 +151,5 @@ if not edited_df.empty:
                 st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
                 st.write(f"📈 **实际月均总支出: {int(item['total']):,}(円)**")
                 st.write(f"🏠 固定月开销: {int(item['base']):,} | 🔑 初期分摊: +{int(item['amort']):,}/月")
+
 
