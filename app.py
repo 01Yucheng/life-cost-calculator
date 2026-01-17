@@ -130,10 +130,9 @@ def safe_int(val):
 # --- 4. UI 界面 ---
 st.title("🗼 东京生活成本 AI 计算器 Pro")
 
-# --- 自动数据导入逻辑 ---
+# --- 数据初始化 ---
 if "df_houses" not in st.session_state:
-    with st.spinner("💾 正在从云端加载数据..."):
-        st.session_state.df_houses = load_data_from_github()
+    st.session_state.df_houses = load_data_from_github()
 
 with st.sidebar:
     st.header("⚙️ 全局设置")
@@ -146,19 +145,19 @@ with st.sidebar:
     days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
     use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
     
-    st.divider()
     if st.button("💾 保存当前到 GitHub", use_container_width=True, type="primary"):
         save_data_to_github(st.session_state.df_houses)
 
-# B. AI 输入区
-with st.expander("➕ 录入新房源 (支持 AI 自动识别)", expanded=True):
-    up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'])
+# --- B. 录入新房源 ---
+with st.expander("➕ 录入新房源", expanded=True):
+    # 【修复重点】添加 key 避免 DuplicateElementId 错误
+    up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'], key="house_img_uploader")
     
     if "ai_cache" not in st.session_state:
         st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""}
 
     if up_file and st.button("🔍 AI 扫描房源图"):
-        with st.spinner("AI 正在提取资料..."):
+        with st.spinner("AI 正在解析图片..."):
             res = analyze_house_image(up_file)
             if res:
                 st.session_state.ai_cache = {
@@ -172,7 +171,6 @@ with st.expander("➕ 录入新房源 (支持 AI 自动识别)", expanded=True):
                     "layout": res.get("layout", "")
                 }
 
-    # 使用已经定义的 safe_int，确保不会出现 NameError
     cache = st.session_state.ai_cache
     c1, c2 = st.columns(2)
     name_in = c1.text_input("🏠 房源名称", value=cache.get("name", ""))
@@ -189,14 +187,10 @@ with st.expander("➕ 录入新房源 (支持 AI 自动识别)", expanded=True):
     det_in = st.text_input("📝 初期明细备注", value=cache.get("details", ""))
 
     if st.button("🚀 计算并添加到清单", use_container_width=True):
-        with st.spinner("正在解析通勤路径..."):
+        with st.spinner("处理中..."):
             s_d = get_transit(loc_in, dest_school)
             j_d = get_transit(loc_in, dest_juku)
-            
-            # 图片 Base64 编码
-            img_b64 = ""
-            if up_file:
-                img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
+            img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}" if up_file else ""
             
             new_row = {
                 "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
@@ -205,7 +199,6 @@ with st.expander("➕ 录入新房源 (支持 AI 自动识别)", expanded=True):
                 "学时(分)": s_d.get('mins', 0), "学费(单程)": s_d.get('yen', 0), "学定期(月)": s_d.get('pass', 0),
                 "塾时(分)": j_d.get('mins', 0), "塾费(单程)": j_d.get('yen', 0), "塾定期(月)": j_d.get('pass', 0)
             }
-            # 更新 Session State
             st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
             st.rerun()
 # B. AI 输入区
@@ -344,6 +337,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
