@@ -12,7 +12,6 @@ from PIL import Image
 # --- 1. 配置与 AI 初始化 ---
 st.set_page_config(page_title="东京生活成本 AI 计算器 Pro", layout="wide", page_icon="🗼")
 
-@st.cache_resource
 def init_ai():
     if "GEMINI_API_KEY" not in st.secrets:
         st.error("🔑 未在 Secrets 中找到 GEMINI_API_KEY")
@@ -36,18 +35,16 @@ def get_github_repo():
     except Exception: return None
 
 def load_data_from_github():
-    cols = [
-        "房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", 
-        "初期资金投入", "初期费用明细", "面积", "户型",
-        "学时(分)", "学费(单程)", "学定期(月)", 
-        "塾时(分)", "塾费(单程)", "塾定期(月)"
-    ]
     try:
         repo = get_github_repo()
         file_content = repo.get_contents("house_data.csv")
         return pd.read_csv(BytesIO(file_content.decoded_content))
     except Exception:
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=[
+            "房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", 
+            "初期资金投入", "初期费用明细", "学时(分)", "学费(单程)", "学定期(月)", 
+            "塾时(分)", "塾费(单程)", "塾定期(月)"
+        ])
 
 def save_data_to_github(df):
     repo = get_github_repo()
@@ -62,9 +59,14 @@ def save_data_to_github(df):
         st.success("🚀 GitHub 数据库已初始化!")
 
 # --- 3. 工具函数 ---
+def get_google_maps_url(origin, dest):
+    base = "https://www.google.com/maps/dir/"
+    return f"{base}{urllib.parse.quote(origin)}/{urllib.parse.quote(dest)}"
+
 def analyze_house_image(uploaded_file):
     try:
         img = Image.open(uploaded_file)
+        # 增加对面积和户型的提取要求
         prompt = """
         作为日本不动产专家，请从图中提取信息并返回 JSON：
         {
@@ -73,11 +75,11 @@ def analyze_house_image(uploaded_file):
           "rent": 租金数字,
           "admin": 管理费数字,
           "initial_total": 初期费用总和,
-          "area": "面积数字",
-          "layout": "户型(如1K)",
+          "area": "面积(仅数字)",
+          "layout": "户型(如1K, 1LDK)",
           "details": "初期费用明细"
         }
-        注意：仅返回 JSON 格式，不要包含Markdown代码块外壳。
+        注意：仅返回 JSON 格式。
         """
         response = model.generate_content([prompt, img])
         clean_text = re.sub(r'```json|```', '', response.text).strip()
@@ -85,13 +87,7 @@ def analyze_house_image(uploaded_file):
     except: return None
 
 def get_transit(origin, destination):
-    prompt = prompt = f"""
-    计算从[{origin}]到[{destination}]的门到门通勤。
-    要求：
-    1. 包含从公寓步行到最近车站的时间。
-    2. 包含地铁运行和换乘时间。
-    返回JSON: {{"mins": 总分钟整数, "yen": 单程票价, "pass": 月定期券}}
-    """
+    prompt = f"从[{origin}]到[{destination}]通勤，返回JSON: {{\"mins\": 整数, \"yen\": 单程, \"pass\": 月定期}}"
     try:
         response = model.generate_content(prompt)
         return json.loads(re.sub(r'```json|```', '', response.text).strip())
@@ -108,7 +104,7 @@ with st.sidebar:
     stay_months = st.slider("📅 预计居住时间 (月)", 1, 48, 24)
     base_living = st.number_input("🍔 月固定基本生活费", value=60000)
     days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
-    days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
+    days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5)
     use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
     
     st.divider()
@@ -119,26 +115,30 @@ if "df_houses" not in st.session_state:
     st.session_state.df_houses = load_data_from_github()
 
 # B. AI 输入区
+
+
 with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=True):
     up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'])
-    use_ai_calc = st.toggle("🤖 启用 AI 自动估算金额", value=True)
+    
+    # 模式切换开关
+    use_ai_calc = st.toggle("🤖 启用 AI 自动估算金额", value=True, help="关闭后 AI 仅识别名称和车站，租金与初期投入将由您手动输入")
 
+    # 临时缓存
     if "ai_cache" not in st.session_state:
-        st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""}
+        st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": ""}
 
     if up_file and st.button("🔍 AI 扫描房源图"):
-        with st.spinner("AI 正在提取资料..."):
+        with st.spinner("AI 正在读取资料..."):
             res = analyze_house_image(up_file)
             if res:
+                # 核心逻辑：若开关关闭，则金额相关字段强制归零
                 st.session_state.ai_cache = {
                     "name": res.get("name", ""),
                     "station": res.get("station", ""),
                     "rent": res.get("rent", 0) if use_ai_calc else 0,
                     "admin": res.get("admin", 0) if use_ai_calc else 0,
                     "initial": res.get("initial_total", 0) if use_ai_calc else 0,
-                    "details": res.get("details", "") if use_ai_calc else "手动模式",
-                    "area": res.get("area", ""),
-                    "layout": res.get("layout", "")
+                    "details": res.get("details", "") if use_ai_calc else "手动输入模式"
                 }
 
     c1, c2 = st.columns(2)
@@ -146,32 +146,29 @@ with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=
     loc_in = c2.text_input("📍 最近车站", value=st.session_state.ai_cache["station"])
     
     r1, r2, r3 = st.columns(3)
-    rent_in = r1.number_input("💰 月租(円)", value=int(st.session_state.ai_cache["rent"]))
-    adm_in = r2.number_input("🏢 管理费", value=int(st.session_state.ai_cache["admin"]))
-    ini_in = r3.number_input("🔑 初期资金投入", value=int(st.session_state.ai_cache["initial"]))
+    # 手动录入时，用户可以在这里根据图片中的数字直接修改
+    rent_in = r1.number_input("💰 月租(円)", value=int(st.session_state.ai_cache["rent"]), step=1000)
+    adm_in = r2.number_input("🏢 管理费", value=int(st.session_state.ai_cache["admin"]), step=100)
+    ini_in = r3.number_input("🔑 初期资金投入", value=int(st.session_state.ai_cache["initial"]), step=1000)
     
+    det_in = st.text_input("📝 初期明细备注 (手动校对)", value=st.session_state.ai_cache["details"])
     c_area, c_layout = st.columns(2)
     area_in = c_area.text_input("📐 面积 (m²)", value=st.session_state.ai_cache.get("area", ""))
     layout_in = c_layout.text_input("🧱 户型 (如 1LDK)", value=st.session_state.ai_cache.get("layout", ""))
-    det_in = st.text_input("📝 初期明细备注", value=st.session_state.ai_cache["details"])
 
     if st.button("🚀 计算并添加到清单", use_container_width=True):
         with st.spinner("解析路径中..."):
             s_d = get_transit(loc_in, dest_school)
             j_d = get_transit(loc_in, dest_juku)
-            img_b64 = ""
-            if up_file:
-                img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
-            
+            img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}" if up_file else ""
             if s_d and j_d:
-                new_row = {
+                new_data = pd.DataFrame([{
                     "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
-                    "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
-                    "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
+                    "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, "初期费用明细": det_in,
                     "学时(分)": s_d['mins'], "学费(单程)": s_d['yen'], "学定期(月)": s_d.get('pass', 0),
                     "塾时(分)": j_d['mins'], "塾费(单程)": j_d['yen'], "塾定期(月)": j_d.get('pass', 0)
-                }
-                st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
+                }])
+                st.session_state.df_houses = pd.concat([st.session_state.df_houses, new_data], ignore_index=True)
                 st.rerun()
 
 # C. 数据清单表
@@ -188,7 +185,7 @@ st.session_state.df_houses = edited_df
 # D. 报告生成与展示
 if not edited_df.empty:
     st.divider()
-    st.subheader(f"📊 成本分析卡片 (按 {stay_months}月平摊排序)")
+    st.subheader(f"📊 成本分析卡片")
 
     report_list = []
     for _, row in edited_df.iterrows():
@@ -202,6 +199,7 @@ if not edited_df.empty:
             monthly_fixed = row["月房租(円)"] + row["管理费(円)"] + best_s + best_j + base_living
             amortized_init = row["初期资金投入"] / (stay_months if stay_months > 0 else 1)
             total = monthly_fixed + amortized_init
+            
             report_list.append({"data": row, "total": total, "fixed": monthly_fixed, "amort": amortized_init})
         except: continue
 
@@ -215,26 +213,36 @@ if not edited_df.empty:
                 if r["房源图片"]: st.image(r["房源图片"], use_container_width=True)
             with info_c:
                 st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
-                st.markdown(f"🏠 **户型: {r.get('户型', 'N/A')} | 面积: {r.get('面积', 'N/A')} m²**")
-                st.write(f"📈 **预计月均总支出: {int(item['total']):,} 円**")
-                
-                with st.expander("🔍 查看费用构成"):
+                st.write(f"📈 **实际月均总支出: {int(item['total']):,} 円**")
+                # --- 房源卡片部分渲染逻辑 ---
+                st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
+                # 新增属性标签显示
+                st.markdown(f"**🏠 {r.get('户型', '未知')} | {r.get('面积', '0')} m²**")
+                st.write(f"📈 **实际月均总支出: {int(item['total']):,} 円**")
+                # 展示明细
+                with st.expander("🔍 查看成本构成"):
                     st.write(f"🏠 **月度固定**: {int(item['fixed']):,} 円")
-                    st.write(f"🔑 **初期分摊**: +{int(item['amort']):,} 円/月 (总额 {int(r['初期资金投入']):,})")
+                    st.write(f"🔑 **初期分摊**: +{int(item['amort']):,} 円/月")
+                    st.caption(f"(总投入 {int(r['初期资金投入']):,} ÷ {stay_months}个月)")
                     if r.get("初期费用明细"):
-                        st.info(f"📋 明细: {r['初期费用明细']}")
+                        st.info(f"📋 **明细记录**: {r['初期费用明细']}")
                 
-                st.caption(f"⏱️ 通勤: 学校 {int(r.get('学时(分)', 0))}分 / 私塾 {int(r.get('塾时(分)', 0))}分")
+                st.caption(f"⏱️ 耗时: 学校 {int(r.get('学时(分)', 0))}分 / 私塾 {int(r.get('塾时(分)', 0))}分")
+
+
+# --- 在 D. 报告展示部分的修改 ---
 
             with btn_c:
-                start_p = f"{r['房源名称']}"
-                school_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_p)}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
-                juku_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_p)}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
+                # 拼接更精准的搜索关键词：房源名称 + 房源位置
+                start_point = f"{r['房源名称']}"
                 
-                st.link_button("🏫 去学校", school_url, use_container_width=True)
-                st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+                # 生成跳转到 Google Maps 的导航链接
+                # 模式为：起点 = 具体房源名称，终点 = 你设置的学校/私塾
+                school_nav_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_point)}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
+                juku_nav_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_point)}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
 
-
+                st.link_button("🏫 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+                st.link_button("🎨 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")
 
 
 
