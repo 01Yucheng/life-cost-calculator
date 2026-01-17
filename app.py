@@ -119,12 +119,10 @@ def get_transit(origin, destination):
 # --- 4. UI 界面 ---
 st.title("🗼 东京生活成本 AI 计算器 Pro")
 
-# 1. 自动初始化数据（确保只运行一次）
+# --- 数据初始化 (确保只写一次) ---
 if "df_houses" not in st.session_state:
-    with st.spinner("💾 正在从云端加载数据..."):
-        st.session_state.df_houses = load_data_from_github()
+    st.session_state.df_houses = load_data_from_github()
 
-# 2. 侧边栏配置
 with st.sidebar:
     st.header("⚙️ 全局设置")
     dest_school = st.text_input("🏫 学校地址", value="东京都新宿区百人町2-24-12 (美都里慕)")
@@ -136,75 +134,10 @@ with st.sidebar:
     days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
     use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
     
-    st.divider()
-    # 刷新后想看到数据，必须点这个按钮同步到 GitHub
-    if st.button("💾 保存当前到 GitHub", use_container_width=True, type="primary"):
+    if st.button("💾 保存当前到 GitHub", width='stretch', type="primary"):
         save_data_to_github(st.session_state.df_houses)
 
-# 3. 录入新房源（只保留这一个区块，不要在下面写第二个！）
-with st.expander("➕ 录入新房源 (支持 AI 自动识别)", expanded=True):
-    up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'], key="house_img_uploader")
-    
-    if "ai_cache" not in st.session_state:
-        st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""}
-
-    if up_file and st.button("🔍 AI 扫描房源图"):
-        with st.spinner("AI 正在提取资料..."):
-            res = analyze_house_image(up_file)
-            if res:
-                st.session_state.ai_cache = {
-                    "name": res.get("name", ""), "station": res.get("station", ""),
-                    "rent": res.get("rent", 0), "admin": res.get("admin", 0),
-                    "initial": res.get("initial_total", 0), "details": res.get("details", ""),
-                    "area": str(res.get("area", "")), "layout": res.get("layout", "")
-                }
-
-    cache = st.session_state.ai_cache
-    c1, c2 = st.columns(2)
-    name_in = c1.text_input("🏠 房源名称", value=cache.get("name", ""))
-    loc_in = c2.text_input("📍 最近车站", value=cache.get("station", ""))
-    
-    r1, r2, r3 = st.columns(3)
-    rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache.get("rent")))
-    adm_in = r2.number_input("🏢 管理费", value=safe_int(cache.get("admin")))
-    ini_in = r3.number_input("🔑 初期资金投入", value=safe_int(cache.get("initial")))
-    
-    c_area, c_layout = st.columns(2)
-    area_in = c_area.text_input("📐 面积 (m²)", value=cache.get("area", ""))
-    layout_in = c_layout.text_input("🧱 户型", value=cache.get("layout", ""))
-    det_in = st.text_input("📝 初期明细备注", value=cache.get("details", ""))
-
-    if st.button("🚀 计算并添加到清单", use_container_width=True):
-        if not loc_in:
-            st.warning("请输入车站名称")
-        else:
-            with st.spinner("正在处理并计算通勤时间..."):
-                s_d = get_transit(loc_in, dest_school)
-                j_d = get_transit(loc_in, dest_juku)
-                
-                # 图片 Base64 转换
-                img_b64 = ""
-                if up_file:
-                    img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
-                
-                new_row = {
-                    "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
-                    "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
-                    "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
-                    "学时(分)": s_d.get('mins', 0), "学费(单程)": s_d.get('yen', 0), "学定期(月)": s_d.get('pass', 0),
-                    "塾时(分)": j_d.get('mins', 0), "塾费(单程)": j_d.get('yen', 0), "塾定期(月)": j_d.get('pass', 0)
-                }
-                st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
-                st.rerun()
-
-# 4. 数据清单表（放在录入区之后）
-st.subheader("📝 房源数据清单")
-edited_df = st.data_editor(st.session_state.df_houses, num_rows="dynamic", use_container_width=True, key="main_editor")
-st.session_state.df_houses = edited_df
-
-# 5. 报告卡片渲染（省略重复的计算逻辑，保持你原有的即可）
-# ... (原有排序和卡片显示代码)
-# --- B. 录入新房源 ---
+# --- B. 录入新房源 (这是全文件唯一的录入区，请删除其他重复的 expander) ---
 with st.expander("➕ 录入新房源", expanded=True):
     up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'], key="house_img_uploader")
     
@@ -232,6 +165,7 @@ with st.expander("➕ 录入新房源", expanded=True):
     loc_in = c2.text_input("📍 最近车站", value=cache.get("station", ""))
     
     r1, r2, r3 = st.columns(3)
+    # 使用统一的 safe_int 转换
     rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache.get("rent")))
     adm_in = r2.number_input("🏢 管理费", value=safe_int(cache.get("admin")))
     ini_in = r3.number_input("🔑 初期资金投入", value=safe_int(cache.get("initial")))
@@ -241,28 +175,24 @@ with st.expander("➕ 录入新房源", expanded=True):
     layout_in = c_layout.text_input("🧱 户型", value=cache.get("layout", ""))
     det_in = st.text_input("📝 初期明细备注", value=cache.get("details", ""))
 
-    if st.button("🚀 计算并添加到清单", use_container_width=True):
-        if not loc_in:
-            st.warning("请输入车站名称以计算通勤时间")
-        else:
-            with st.spinner("正在处理并计算通勤时间..."):
-                s_d = get_transit(loc_in, dest_school)
-                j_d = get_transit(loc_in, dest_juku)
-                
-                img_b64 = ""
-                if up_file:
-                    img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
-                
-                new_row = {
-                    "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
-                    "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
-                    "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
-                    "学时(分)": s_d.get('mins', 0), "学费(单程)": s_d.get('yen', 0), "学定期(月)": s_d.get('pass', 0),
-                    "塾时(分)": j_d.get('mins', 0), "塾费(单程)": j_d.get('yen', 0), "塾定期(月)": j_d.get('pass', 0)
-                }
-                st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
-                st.rerun()
-
+    if st.button("🚀 计算并添加到清单", width='stretch'):
+        with st.spinner("正在处理..."):
+            s_d = get_transit(loc_in, dest_school)
+            j_d = j_d = get_transit(loc_in, dest_juku)
+            
+            img_b64 = ""
+            if up_file:
+                img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
+            
+            new_row = {
+                "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
+                "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
+                "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
+                "学时(分)": s_d.get('mins', 0), "学费(单程)": s_d.get('yen', 0), "学定期(月)": s_d.get('pass', 0),
+                "塾时(分)": j_d.get('mins', 0), "塾费(单程)": j_d.get('yen', 0), "塾定期(月)": j_d.get('pass', 0)
+            }
+            st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
+            st.rerun()
 # C. 数据清单表
 st.subheader("📝 房源数据清单")
 df_edit = st.session_state.df_houses.copy()
@@ -333,4 +263,5 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
