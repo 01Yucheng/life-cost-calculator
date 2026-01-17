@@ -31,14 +31,16 @@ model = init_ai()
 # --- 2. GitHub 数据同步工具 ---
 def get_github_repo():
     try:
-        g = Github(st.secrets["GITHUB_TOKEN"])
+        from github import Auth  # 导入最新认证模块
+        auth = Auth.Token(st.secrets["GITHUB_TOKEN"])
+        g = Github(auth=auth)
         return g.get_repo(st.secrets["REPO_NAME"])
     except Exception as e:
-        st.error(f"GitHub 连接失败，请检查 Secrets 配置: {e}")
+        st.error(f"GitHub 连接失败: {e}")
         return None
 
 def load_data_from_github():
-    # 定义标准列名，确保与 CSV 一致
+    # 定义标准列名，确保与 CSV 字段完全一致
     cols = [
         "房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", 
         "初期资金投入", "初期费用明细", "面积", "户型",
@@ -48,26 +50,25 @@ def load_data_from_github():
     try:
         repo = get_github_repo()
         if repo:
-            # 获取文件内容
             file_content = repo.get_contents("house_data.csv")
-            # 使用 utf-8-sig 处理 Excel 可能生成的 BOM
+            # 使用 utf-8-sig 处理 Excel 生成的 BOM 字符
             df = pd.read_csv(BytesIO(file_content.decoded_content), encoding='utf-8-sig')
             
-            # 1. 补全缺失列
+            # 补全缺失列
             for c in cols:
                 if c not in df.columns:
                     df[c] = ""
             
-            # 2. 强制转换数字列（处理空值和类型错误）
+            # 强制转换数字列，处理 CSV 中的空值
             num_cols = ["月房租(円)", "管理费(円)", "初期资金投入", "学费(单程)", "学定期(月)", "塾时(分)", "塾费(单程)", "塾定期(月)"]
             for col in num_cols:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             
-            # 3. 确保图片列是字符串且处理缺失
+            # 确保图片列是字符串
             df["房源图片"] = df["房源图片"].fillna("")
             
             return df[cols]
-    except Exception as e:
+    except Exception:
         st.info("💡 尚未发现云端数据库，将初始化新表。")
     
     return pd.DataFrame(columns=cols)
@@ -75,16 +76,14 @@ def load_data_from_github():
 def save_data_to_github(df):
     repo = get_github_repo()
     if not repo: return
-    # 导出时包含 Base64 图片字符串
     csv_string = df.to_csv(index=False, encoding='utf-8-sig')
     try:
         contents = repo.get_contents("house_data.csv")
         repo.update_file(contents.path, "Update data with images", csv_string, contents.sha)
-        st.success("✅ 数据（含图片）已同步至 GitHub!")
+        st.success("✅ 数据已同步至 GitHub!")
     except Exception:
         repo.create_file("house_data.csv", "Initial commit", csv_string)
         st.success("🚀 GitHub 数据库已初始化!")
-
 # --- 3. 工具函数 ---
 def analyze_house_image(uploaded_file):
     try:
@@ -127,7 +126,7 @@ def safe_int(val):
 # --- 4. UI 界面 ---
 st.title("🗼 东京生活成本 AI 计算器 Pro")
 
-# --- 关键：每次运行自动加载数据 ---
+# 启动即自动加载 CSV 数据
 if "df_houses" not in st.session_state:
     st.session_state.df_houses = load_data_from_github()
 
@@ -137,7 +136,7 @@ with st.sidebar:
     dest_juku = st.text_input("🎨 私塾地址", value="东京都荒川区西日暮里2-12-5 (尚艺舍)")
     st.divider()
     stay_months = st.slider("📅 预计居住时间 (月)", 1, 48, 24)
-    base_living = st.number_input("🍔 月固定生活费", value=60000)
+    base_living = st.number_input("🍔 月固定基本生活费", value=60000)
     days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
     days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
     use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
@@ -147,18 +146,16 @@ with st.sidebar:
         save_data_to_github(st.session_state.df_houses)
 
 # B. AI 输入区
-with st.expander("➕ 录入新房源 (支持 AI 自动识别)", expanded=True):
+with st.expander("➕ 录入新房源 (支持 AI 扫描图片)", expanded=True):
     up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'])
     
-    # 初始化 AI 缓存
     if "ai_cache" not in st.session_state:
         st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""}
 
     if up_file and st.button("🔍 AI 扫描房源图"):
-        with st.spinner("AI 正在解析图片并转换 Base64..."):
+        with st.spinner("AI 正在解析图片..."):
             res = analyze_house_image(up_file)
             if res:
-                # 存入缓存
                 st.session_state.ai_cache = {
                     "name": res.get("name", ""),
                     "station": res.get("station", ""),
@@ -170,31 +167,28 @@ with st.expander("➕ 录入新房源 (支持 AI 自动识别)", expanded=True):
                     "layout": res.get("layout", "")
                 }
 
-    # 输入控件使用 safe_int 保证安全
-# 获取缓存（确保 cache 变量已定义）
-cache = st.session_state.get("ai_cache", {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""})
-
-c1, c2 = st.columns(2)
-name_in = c1.text_input("🏠 房源名称", value=cache.get("name", ""))
-loc_in = c2.text_input("📍 最近车站", value=cache.get("station", ""))
-
-r1, r2, r3 = st.columns(3)
-# 现在的调用是安全的了
-rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache.get("rent")))
-adm_in = r2.number_input("🏢 管理费", value=safe_int(cache.get("admin")))
-ini_in = r3.number_input("🔑 初期费用总额", value=safe_int(cache.get("initial")))
+    # 此时 safe_int 已经在上方定义，不会报错
+    cache = st.session_state.ai_cache
+    c1, c2 = st.columns(2)
+    name_in = c1.text_input("🏠 房源名称", value=cache["name"])
+    loc_in = c2.text_input("📍 最近车站", value=cache["station"])
     
-c_area, c_layout = st.columns(2)
-area_in = c_area.text_input("📐 面积 (m²)", value=cache["area"])
-layout_in = c_layout.text_input("🧱 户型", value=cache["layout"])
-det_in = st.text_input("📝 初期费用明细", value=cache["details"])
+    r1, r2, r3 = st.columns(3)
+    rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache["rent"]))
+    adm_in = r2.number_input("🏢 管理费", value=safe_int(cache["admin"]))
+    ini_in = r3.number_input("🔑 初期资金投入", value=safe_int(cache["initial"]))
+    
+    c_area, c_layout = st.columns(2)
+    area_in = c_area.text_input("📐 面积 (m²)", value=cache["area"])
+    layout_in = c_layout.text_input("🧱 户型", value=cache["layout"])
+    det_in = st.text_input("📝 初期明细备注", value=cache["details"])
 
     if st.button("🚀 计算并添加到清单", use_container_width=True):
-        with st.spinner("正在计算通勤时间并处理图片..."):
+        with st.spinner("解析路径与图片编码中..."):
             s_d = get_transit(loc_in, dest_school)
             j_d = get_transit(loc_in, dest_juku)
             
-            # 图片转 Base64 存储
+            # 图片编码
             img_b64 = ""
             if up_file:
                 img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
@@ -206,7 +200,6 @@ det_in = st.text_input("📝 初期费用明细", value=cache["details"])
                 "学时(分)": s_d.get('mins', 0), "学费(单程)": s_d.get('yen', 0), "学定期(月)": s_d.get('pass', 0),
                 "塾时(分)": j_d.get('mins', 0), "塾费(单程)": j_d.get('yen', 0), "塾定期(月)": j_d.get('pass', 0)
             }
-            # 更新 Session State
             st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
             st.rerun()
 
@@ -346,6 +339,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
