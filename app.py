@@ -184,10 +184,10 @@ rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache.get("rent")))
 adm_in = r2.number_input("🏢 管理费", value=safe_int(cache.get("admin")))
 ini_in = r3.number_input("🔑 初期费用总额", value=safe_int(cache.get("initial")))
     
-    c_area, c_layout = st.columns(2)
-    area_in = c_area.text_input("📐 面积 (m²)", value=cache["area"])
-    layout_in = c_layout.text_input("🧱 户型", value=cache["layout"])
-    det_in = st.text_input("📝 初期费用明细", value=cache["details"])
+c_area, c_layout = st.columns(2)
+area_in = c_area.text_input("📐 面积 (m²)", value=cache["area"])
+layout_in = c_layout.text_input("🧱 户型", value=cache["layout"])
+det_in = st.text_input("📝 初期费用明细", value=cache["details"])
 
     if st.button("🚀 计算并添加到清单", use_container_width=True):
         with st.spinner("正在计算通勤时间并处理图片..."):
@@ -346,6 +346,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
