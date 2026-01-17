@@ -152,9 +152,6 @@ with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=
     det_in = st.text_input("📝 初期明细备注 (手动校对)", value=st.session_state.ai_cache["details"])
 
     if st.button("🚀 计算并添加到清单", use_container_width=True):
-        # 保持后续计算逻辑不变...
-
-    if st.button("🚀 添加到清单", use_container_width=True):
         with st.spinner("解析路径中..."):
             s_d = get_transit(loc_in, dest_school)
             j_d = get_transit(loc_in, dest_juku)
@@ -237,6 +234,7 @@ if not edited_df.empty:
 
                 st.link_button("🏠 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
                 st.link_button("🏠 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+
 
 
 
