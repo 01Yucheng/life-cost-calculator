@@ -106,10 +106,6 @@ with st.sidebar:
     days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
     days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5)
     use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
-    # 在录入区新增两个小列
-    c_area, c_layout = st.columns(2)
-    area_in = c_area.text_input("📐 面积 (m²)", value=st.session_state.ai_cache.get("area", ""))
-    layout_in = c_layout.text_input("🧱 户型 (如 1LDK)", value=st.session_state.ai_cache.get("layout", ""))
     
     st.divider()
     if st.button("💾 保存当前到 GitHub", use_container_width=True, type="primary"):
@@ -156,6 +152,9 @@ with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=
     ini_in = r3.number_input("🔑 初期资金投入", value=int(st.session_state.ai_cache["initial"]), step=1000)
     
     det_in = st.text_input("📝 初期明细备注 (手动校对)", value=st.session_state.ai_cache["details"])
+    c_area, c_layout = st.columns(2)
+    area_in = c_area.text_input("📐 面积 (m²)", value=st.session_state.ai_cache.get("area", ""))
+    layout_in = c_layout.text_input("🧱 户型 (如 1LDK)", value=st.session_state.ai_cache.get("layout", ""))
 
     if st.button("🚀 计算并添加到清单", use_container_width=True):
         with st.spinner("解析路径中..."):
@@ -244,6 +243,7 @@ if not edited_df.empty:
 
                 st.link_button("🏫 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
                 st.link_button("🎨 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+
 
 
 
