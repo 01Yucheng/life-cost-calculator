@@ -108,7 +108,7 @@ def analyze_house_image(uploaded_file):
 def get_transit(origin, destination):
     if not origin or origin.strip() == "":
         return {"mins": 0, "yen": 0, "pass": 0}
-    prompt = f"基于GoogleMap的数据从[{origin}]到[{destination}]通勤，返回JSON: {{\"mins\": 整数, \"yen\": 单程, \"pass\": 月定期}}"
+    prompt = f"基于GoogleMap的数据在工作日8：30 a.m从[{origin}]到[{destination}]通勤，返回JSON: {{\"mins\": 整数, \"yen\": 单程, \"pass\": 月定期}}"
     try:
         response = model.generate_content(prompt)
         clean_text = re.search(r'\{.*\}', response.text, re.DOTALL).group()
@@ -263,6 +263,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
