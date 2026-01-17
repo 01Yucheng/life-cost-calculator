@@ -151,8 +151,8 @@ with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=
 
     if st.button("🚀 计算并添加到清单", use_container_width=True):
         with st.spinner("解析路径中..."):
-            s_d = get_transit(loc_in, dest_school)
-            j_d = get_transit(loc_in, dest_juku)
+            s_d = get_transit(name_in, dest_school)
+            j_d = get_transit(name_in, dest_juku)
             img_b64 = ""
             if up_file:
                 img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
@@ -227,6 +227,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
