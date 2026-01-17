@@ -20,7 +20,7 @@ def init_ai():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target = "models/gemini-3"
+        target = "models/gemini-3-flash"
         return genai.GenerativeModel(target if target in models else models[0])
     except Exception as e:
         st.error(f"AI 初始化失败: {e}")
@@ -240,6 +240,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
