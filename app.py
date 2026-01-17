@@ -11,7 +11,31 @@ from PIL import Image
 
 # --- 1. 配置与 AI 初始化 ---
 st.set_page_config(page_title="东京生活成本 AI 计算器 Pro", layout="wide", page_icon="🗼")
-
+def load_data_from_github():
+    cols = ["房源名称", "房源位置", "房源图片", "月房租(円)", "管理费(円)", "初期资金投入", "初期费用明细", "学时(分)", "学费(单程)", "学定期(月)", "塾时(分)", "塾费(单程)", "塾定期(月)", "面积", "户型"]
+    try:
+        repo = get_github_repo()
+        if repo:
+            file_content = repo.get_contents("house_data.csv")
+            # 关键点：使用 utf-8-sig 并处理空行
+            df = pd.read_csv(BytesIO(file_content.decoded_content), encoding='utf-8-sig')
+            
+            # 确保列名对齐，防止因为列名空格导致读取不到
+            df.columns = [c.strip() for c in df.columns]
+            
+            # 补齐缺失列
+            for c in cols:
+                if c not in df.columns: df[c] = ""
+            
+            # 强制数字列类型，防止显示时出错
+            num_cols = ["月房租(円)", "管理费(円)", "初期资金投入", "学费(单程)", "学定期(月)", "塾时(分)", "塾费(单程)", "塾定期(月)"]
+            for col in num_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+            
+            return df[cols]
+    except Exception as e:
+        print(f"读取失败详情: {e}") # 终端调试用
+        return pd.DataFrame(columns=cols)
 @st.cache_resource
 def init_ai():
     if "GEMINI_API_KEY" not in st.secrets:
@@ -275,6 +299,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
