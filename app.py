@@ -113,23 +113,30 @@ if "df_houses" not in st.session_state:
     st.session_state.df_houses = load_data_from_github()
 
 # B. AI 输入区
-with st.expander("➕ 录入新房源 (支持照片识别明细)", expanded=True):
+
+
+with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=True):
     up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'])
     
-    if "ai_cache" not in st.session_state:
-        st.session_state.ai_cache = {"name": "", "station": "", "rent": 80000, "admin": 5000, "initial": 0, "details": ""}
+    # 模式切换开关
+    use_ai_calc = st.toggle("🤖 启用 AI 自动估算金额", value=True, help="关闭后 AI 仅识别名称和车站，租金与初期投入将由您手动输入")
 
-    if up_file and st.button("🔍 AI 自动分析照片及明细"):
-        with st.spinner("AI 正在提取深度资料..."):
+    # 临时缓存
+    if "ai_cache" not in st.session_state:
+        st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": ""}
+
+    if up_file and st.button("🔍 AI 扫描房源图"):
+        with st.spinner("AI 正在读取资料..."):
             res = analyze_house_image(up_file)
             if res:
+                # 核心逻辑：若开关关闭，则金额相关字段强制归零
                 st.session_state.ai_cache = {
                     "name": res.get("name", ""),
                     "station": res.get("station", ""),
-                    "rent": res.get("rent", 0),
-                    "admin": res.get("admin", 0),
-                    "initial": res.get("initial_total", 0),
-                    "details": res.get("details", "")
+                    "rent": res.get("rent", 0) if use_ai_calc else 0,
+                    "admin": res.get("admin", 0) if use_ai_calc else 0,
+                    "initial": res.get("initial_total", 0) if use_ai_calc else 0,
+                    "details": res.get("details", "") if use_ai_calc else "手动输入模式"
                 }
 
     c1, c2 = st.columns(2)
@@ -137,11 +144,15 @@ with st.expander("➕ 录入新房源 (支持照片识别明细)", expanded=True
     loc_in = c2.text_input("📍 最近车站", value=st.session_state.ai_cache["station"])
     
     r1, r2, r3 = st.columns(3)
-    rent_in = r1.number_input("💰 月租", value=int(st.session_state.ai_cache["rent"]))
-    adm_in = r2.number_input("🏢 管理费", value=int(st.session_state.ai_cache["admin"]))
-    ini_in = r3.number_input("🔑 初期总额", value=int(st.session_state.ai_cache["initial"]))
+    # 手动录入时，用户可以在这里根据图片中的数字直接修改
+    rent_in = r1.number_input("💰 月租(円)", value=int(st.session_state.ai_cache["rent"]), step=1000)
+    adm_in = r2.number_input("🏢 管理费", value=int(st.session_state.ai_cache["admin"]), step=100)
+    ini_in = r3.number_input("🔑 初期资金投入", value=int(st.session_state.ai_cache["initial"]), step=1000)
     
-    det_in = st.text_input("📝 初期费用明细 (AI 自动填充)", value=st.session_state.ai_cache["details"])
+    det_in = st.text_input("📝 初期明细备注 (手动校对)", value=st.session_state.ai_cache["details"])
+
+    if st.button("🚀 计算并添加到清单", use_container_width=True):
+        # 保持后续计算逻辑不变...
 
     if st.button("🚀 添加到清单", use_container_width=True):
         with st.spinner("解析路径中..."):
@@ -217,7 +228,7 @@ if not edited_df.empty:
 
             with btn_c:
                 # 拼接更精准的搜索关键词：房源名称 + 房源位置
-                start_point = f"{r['房源名称']} {r['房源位置']}"
+                start_point = f"{r['房源名称']}"
                 
                 # 生成跳转到 Google Maps 的导航链接
                 # 模式为：起点 = 具体房源名称，终点 = 你设置的学校/私塾
@@ -226,5 +237,6 @@ if not edited_df.empty:
 
                 st.link_button("🏠 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
                 st.link_button("🏠 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+
 
 
