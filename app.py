@@ -20,7 +20,7 @@ def init_ai():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target = "models/gemini-3-flash"
+        target = "models/gemini-3"
         return genai.GenerativeModel(target if target in models else models[0])
     except Exception as e:
         st.error(f"AI 初始化失败: {e}")
@@ -85,7 +85,13 @@ def analyze_house_image(uploaded_file):
     except: return None
 
 def get_transit(origin, destination):
-    prompt = f"从[{origin}]到[{destination}]通勤，返回JSON: {{\"mins\": 整数, \"yen\": 单程, \"pass\": 月定期}}"
+    prompt = prompt = f"""
+    计算从[{origin}]到[{destination}]的门到门通勤。
+    要求：
+    1. 包含从公寓步行到最近车站的时间。
+    2. 包含地铁运行和换乘时间。
+    返回JSON: {{"mins": 总分钟整数, "yen": 单程票价, "pass": 月定期券}}
+    """
     try:
         response = model.generate_content(prompt)
         return json.loads(re.sub(r'```json|```', '', response.text).strip())
@@ -227,6 +233,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
