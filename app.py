@@ -116,7 +116,14 @@ def get_transit(origin, destination):
         clean_text = re.search(r'\{.*\}', response.text, re.DOTALL).group()
         return json.loads(clean_text)
     except: return {"mins": 0, "yen": 0, "pass": 0}
-
+def safe_int(val):
+    """防止 NoneType 或非法字符串导致转换崩溃的万能转换器"""
+    try:
+        if val is None or (isinstance(val, float) and pd.isna(val)) or val == "": 
+            return 0
+        return int(float(val)) # 先转 float 再转 int 可以处理 "75000.0" 这样的字符串
+    except (ValueError, TypeError):
+        return 0
 # --- 4. UI 界面 ---
 st.title("🗼 东京生活成本 AI 计算器 Pro")
 
@@ -164,15 +171,18 @@ with st.expander("➕ 录入新房源 (支持 AI 自动识别)", expanded=True):
                 }
 
     # 输入控件使用 safe_int 保证安全
-    cache = st.session_state.ai_cache
-    c1, c2 = st.columns(2)
-    name_in = c1.text_input("🏠 房源名称", value=cache["name"])
-    loc_in = c2.text_input("📍 最近车站", value=cache["station"])
-    
-    r1, r2, r3 = st.columns(3)
-    rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache["rent"]))
-    adm_in = r2.number_input("🏢 管理费", value=safe_int(cache["admin"]))
-    ini_in = r3.number_input("🔑 初期费用总额", value=safe_int(cache["initial"]))
+# 获取缓存（确保 cache 变量已定义）
+cache = st.session_state.get("ai_cache", {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""})
+
+c1, c2 = st.columns(2)
+name_in = c1.text_input("🏠 房源名称", value=cache.get("name", ""))
+loc_in = c2.text_input("📍 最近车站", value=cache.get("station", ""))
+
+r1, r2, r3 = st.columns(3)
+# 现在的调用是安全的了
+rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache.get("rent")))
+adm_in = r2.number_input("🏢 管理费", value=safe_int(cache.get("admin")))
+ini_in = r3.number_input("🔑 初期费用总额", value=safe_int(cache.get("initial")))
     
     c_area, c_layout = st.columns(2)
     area_in = c_area.text_input("📐 面积 (m²)", value=cache["area"])
@@ -336,6 +346,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
