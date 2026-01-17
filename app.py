@@ -96,8 +96,8 @@ st.title("🗼 东京生活成本 AI 计算器 Pro")
 
 with st.sidebar:
     st.header("⚙️ 全局设置")
-    dest_school = st.text_input("🏫 学校地址/车站", value="新宿")
-    dest_juku = st.text_input("🎨 私塾地址/车站", value="西日暮里")
+    dest_school = st.text_input("🏫 学校地址/车站", value="东京都新宿区百人町2-24-12 (美都里慕)")
+    dest_juku = st.text_input("🎨 私塾地址/车站", value="东京都荒川区西日暮里2-12-5 (尚艺舍)")
     st.divider()
     stay_months = st.slider("📅 预计居住时间 (月)", 1, 48, 24)
     base_living = st.number_input("🍔 月固定基本生活费", value=60000)
@@ -232,8 +232,9 @@ if not edited_df.empty:
                 school_nav_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_point)}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
                 juku_nav_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_point)}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
 
-                st.link_button("🏠 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
-                st.link_button("🏠 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+                st.link_button("🏫 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+                st.link_button("🎨 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+
 
 
 
