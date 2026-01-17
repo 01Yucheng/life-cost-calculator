@@ -119,7 +119,8 @@ if "df_houses" not in st.session_state:
     st.session_state.df_houses = load_data_from_github()
 
 # B. AI 输入区
-with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=True):
+# --- B. AI 输入区 (增强预览功能) ---
+with st.expander("➕ 录入新房源 (支持实时结果预览)", expanded=True):
     up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'])
     use_ai_calc = st.toggle("🤖 启用 AI 自动估算金额", value=True)
 
@@ -130,6 +131,10 @@ with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=
         with st.spinner("AI 正在提取资料..."):
             res = analyze_house_image(up_file)
             if res:
+                # --- [新增] 关键点：直接在界面显示 AI 抓取的原始 JSON ---
+                st.success("✅ AI 提取原始数据如下：")
+                st.json(res)  
+                
                 st.session_state.ai_cache = {
                     "name": res.get("name", ""),
                     "station": res.get("station", ""),
@@ -141,6 +146,7 @@ with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=
                     "layout": res.get("layout", "")
                 }
 
+    # 录入表单
     c1, c2 = st.columns(2)
     name_in = c1.text_input("🏠 房源名称", value=st.session_state.ai_cache["name"])
     loc_in = c2.text_input("📍 最近车站", value=st.session_state.ai_cache["station"])
@@ -155,25 +161,36 @@ with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=
     layout_in = c_layout.text_input("🧱 户型 (如 1LDK)", value=st.session_state.ai_cache.get("layout", ""))
     det_in = st.text_input("📝 初期明细备注", value=st.session_state.ai_cache["details"])
 
-    if st.button("🚀 计算并添加到清单", use_container_width=True):
-        with st.spinner("解析路径中..."):
+    # --- [修改] 两步确认逻辑 ---
+    if st.button("🧮 1. 预览 AI 通勤计算结果", use_container_width=True):
+        with st.spinner("正在询问 AI 通勤方案..."):
             s_d = get_transit(loc_in, dest_school)
             j_d = get_transit(loc_in, dest_juku)
-            img_b64 = ""
-            if up_file:
-                img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
-            
             if s_d and j_d:
-                new_row = {
-                    "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
-                    "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
-                    "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
-                    "学时(分)": s_d['mins'], "学费(单程)": s_d['yen'], "学定期(月)": s_d.get('pass', 0),
-                    "塾时(分)": j_d['mins'], "塾费(单程)": j_d['yen'], "塾定期(月)": j_d.get('pass', 0)
-                }
-                st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
-                st.rerun()
+                st.session_state.last_transit = {"school": s_d, "juku": j_d}
+                # 在下方展示预测结果
+                col_a, col_b = st.columns(2)
+                col_a.metric("🏫 学校通勤", f"{s_d['mins']} 分钟", f"{s_d['yen']} 円/单程")
+                col_b.metric("🎨 私塾通勤", f"{j_d['mins']} 分钟", f"{j_d['yen']} 円/单程")
+                st.info(f"💡 AI 建议定期券: 学校 {s_d['pass']} | 私塾 {j_d['pass']}")
 
+    if "last_transit" in st.session_state:
+        if st.button("🚀 2. 确认无误，添加到清单", use_container_width=True, type="primary"):
+            s_d = st.session_state.last_transit["school"]
+            j_d = st.session_state.last_transit["juku"]
+            
+            img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}" if up_file else ""
+            
+            new_row = {
+                "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
+                "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
+                "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
+                "学时(分)": s_d['mins'], "学费(单程)": s_d['yen'], "学定期(月)": s_d.get('pass', 0),
+                "塾时(分)": j_d['mins'], "塾费(单程)": j_d['yen'], "塾定期(月)": j_d.get('pass', 0)
+            }
+            st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
+            del st.session_state.last_transit # 清理缓存
+            st.rerun()
 # C. 数据清单表
 st.subheader("📝 房源数据清单")
 df_edit = st.session_state.df_houses.copy()
@@ -233,6 +250,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
