@@ -116,13 +116,15 @@ def get_transit(origin, destination):
     except: return {"mins": 0, "yen": 0, "pass": 0}
 
 # --- 4. UI 界面 ---
-# --- 4. UI 界面 ---
 st.title("🗼 东京生活成本 AI 计算器 Pro")
 
-# --- 数据初始化 (确保只写一次) ---
+# --- 核心逻辑：初始化数据 ---
+# 只有当 session_state 里没有数据时，才从 GitHub 加载
 if "df_houses" not in st.session_state:
-    st.session_state.df_houses = load_data_from_github()
+    with st.spinner("💾 正在从云端同步数据库..."):
+        st.session_state.df_houses = load_data_from_github()
 
+# --- 侧边栏配置 ---
 with st.sidebar:
     st.header("⚙️ 全局设置")
     dest_school = st.text_input("🏫 学校地址", value="东京都新宿区百人町2-24-12 (美都里慕)")
@@ -134,38 +136,37 @@ with st.sidebar:
     days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
     use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
     
-    if st.button("💾 保存当前到 GitHub", width='stretch', type="primary"):
+    st.divider()
+    # 手动同步按钮（作为双重保险）
+    if st.button("🔄 强制同步云端数据", type="primary"):
         save_data_to_github(st.session_state.df_houses)
 
-# --- B. 录入新房源 (这是全文件唯一的录入区，请删除其他重复的 expander) ---
+# --- B. 录入新房源 (全文件仅保留这一个区块) ---
 with st.expander("➕ 录入新房源", expanded=True):
-    up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'], key="house_img_uploader")
+    # 使用唯一的 key 避免报错
+    up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'], key="main_house_uploader")
     
     if "ai_cache" not in st.session_state:
         st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""}
 
     if up_file and st.button("🔍 AI 扫描房源图"):
-        with st.spinner("AI 正在解析图片..."):
+        with st.spinner("AI 正在解析图片并预填表单..."):
             res = analyze_house_image(up_file)
             if res:
                 st.session_state.ai_cache = {
-                    "name": res.get("name", ""),
-                    "station": res.get("station", ""),
-                    "rent": res.get("rent", 0),
-                    "admin": res.get("admin", 0),
-                    "initial": res.get("initial_total", 0),
-                    "details": res.get("details", ""),
-                    "area": str(res.get("area", "")),
-                    "layout": res.get("layout", "")
+                    "name": res.get("name", ""), "station": res.get("station", ""),
+                    "rent": res.get("rent", 0), "admin": res.get("admin", 0),
+                    "initial": res.get("initial_total", 0), "details": res.get("details", ""),
+                    "area": str(res.get("area", "")), "layout": res.get("layout", "")
                 }
 
+    # 表单界面
     cache = st.session_state.ai_cache
     c1, c2 = st.columns(2)
     name_in = c1.text_input("🏠 房源名称", value=cache.get("name", ""))
     loc_in = c2.text_input("📍 最近车站", value=cache.get("station", ""))
     
     r1, r2, r3 = st.columns(3)
-    # 使用统一的 safe_int 转换
     rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache.get("rent")))
     adm_in = r2.number_input("🏢 管理费", value=safe_int(cache.get("admin")))
     ini_in = r3.number_input("🔑 初期资金投入", value=safe_int(cache.get("initial")))
@@ -175,33 +176,44 @@ with st.expander("➕ 录入新房源", expanded=True):
     layout_in = c_layout.text_input("🧱 户型", value=cache.get("layout", ""))
     det_in = st.text_input("📝 初期明细备注", value=cache.get("details", ""))
 
-    if st.button("🚀 计算并添加到清单", width='stretch'):
-        with st.spinner("正在处理..."):
-            s_d = get_transit(loc_in, dest_school)
-            j_d = j_d = get_transit(loc_in, dest_juku)
-            
-            img_b64 = ""
-            if up_file:
-                img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
-            
-            new_row = {
-                "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
-                "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
-                "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
-                "学时(分)": s_d.get('mins', 0), "学费(单程)": s_d.get('yen', 0), "学定期(月)": s_d.get('pass', 0),
-                "塾时(分)": j_d.get('mins', 0), "塾费(单程)": j_d.get('yen', 0), "塾定期(月)": j_d.get('pass', 0)
-            }
-            st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
-            st.rerun()
-# C. 数据清单表
-st.subheader("📝 房源数据清单")
-df_edit = st.session_state.df_houses.copy()
-num_cols = ["月房租(円)", "管理费(円)", "初期资金投入", "学费(单程)", "学定期(月)", "塾费(单程)", "塾定期(月)"]
-for col in num_cols:
-    if col in df_edit.columns:
-        df_edit[col] = pd.to_numeric(df_edit[col], errors='coerce').fillna(0)
+    if st.button("🚀 计算并保存到云端", type="primary"):
+        if not loc_in or not name_in:
+            st.warning("请填写房源名称和车站")
+        else:
+            with st.spinner("正在计算通勤并同步至 GitHub..."):
+                s_d = get_transit(loc_in, dest_school)
+                j_d = get_transit(loc_in, dest_juku)
+                
+                # 图片转 Base64 存储
+                img_b64 = ""
+                if up_file:
+                    img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
+                
+                new_row = {
+                    "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
+                    "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
+                    "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
+                    "学时(分)": s_d.get('mins', 0), "学费(单程)": s_d.get('yen', 0), "学定期(月)": s_d.get('pass', 0),
+                    "塾时(分)": j_d.get('mins', 0), "塾费(单程)": j_d.get('yen', 0), "塾定期(月)": j_d.get('pass', 0)
+                }
+                
+                # 1. 更新当前列表
+                st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
+                # 2. 【关键】立刻保存到 GitHub，确保刷新不丢失
+                save_data_to_github(st.session_state.df_houses)
+                # 3. 刷新页面
+                st.rerun()
 
-edited_df = st.data_editor(df_edit, num_rows="dynamic", use_container_width=True, key="main_editor")
+# --- C. 数据清单表 ---
+st.subheader("📝 房源数据清单")
+# 这里的 edited_df 会实时反馈给 session_state
+edited_df = st.data_editor(
+    st.session_state.df_houses, 
+    num_rows="dynamic", 
+    use_container_width=True, 
+    key="main_data_editor"
+)
+# 如果在表格里手动删除了行或改了数字，也要同步回 state
 st.session_state.df_houses = edited_df
 
 # D. 报告生成与展示
@@ -263,6 +275,7 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
 
 
