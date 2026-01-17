@@ -64,9 +64,9 @@ def get_google_maps_url(origin, dest):
     return f"{base}{urllib.parse.quote(origin)}/{urllib.parse.quote(dest)}"
 
 def analyze_house_image(uploaded_file):
-    """照片自动分析功能：提取明细"""
     try:
         img = Image.open(uploaded_file)
+        # 增加对面积和户型的提取要求
         prompt = """
         作为日本不动产专家，请从图中提取信息并返回 JSON：
         {
@@ -74,8 +74,10 @@ def analyze_house_image(uploaded_file):
           "station": "最近车站",
           "rent": 租金数字,
           "admin": 管理费数字,
-          "initial_total": 所有初期费用总和数字,
-          "details": "用简洁的一句话列出明细，例如：礼1押1, 保证会社50%, 清扫费4万"
+          "initial_total": 初期费用总和,
+          "area": "面积(仅数字)",
+          "layout": "户型(如1K, 1LDK)",
+          "details": "初期费用明细"
         }
         注意：仅返回 JSON 格式。
         """
@@ -104,6 +106,10 @@ with st.sidebar:
     days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
     days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5)
     use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
+    # 在录入区新增两个小列
+    c_area, c_layout = st.columns(2)
+    area_in = c_area.text_input("📐 面积 (m²)", value=st.session_state.ai_cache.get("area", ""))
+    layout_in = c_layout.text_input("🧱 户型 (如 1LDK)", value=st.session_state.ai_cache.get("layout", ""))
     
     st.divider()
     if st.button("💾 保存当前到 GitHub", use_container_width=True, type="primary"):
@@ -209,7 +215,11 @@ if not edited_df.empty:
             with info_c:
                 st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
                 st.write(f"📈 **实际月均总支出: {int(item['total']):,} 円**")
-                
+                # --- 房源卡片部分渲染逻辑 ---
+                st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
+                # 新增属性标签显示
+                st.markdown(f"**🏠 {r.get('户型', '未知')} | {r.get('面积', '0')} m²**")
+                st.write(f"📈 **实际月均总支出: {int(item['total']):,} 円**")
                 # 展示明细
                 with st.expander("🔍 查看成本构成"):
                     st.write(f"🏠 **月度固定**: {int(item['fixed']):,} 円")
@@ -234,6 +244,7 @@ if not edited_df.empty:
 
                 st.link_button("🏫 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
                 st.link_button("🎨 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+
 
 
 
