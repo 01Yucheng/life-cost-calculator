@@ -19,9 +19,8 @@ def init_ai():
         st.stop()
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target = "models/gemini-3-flash"
-        return genai.GenerativeModel(target if target in models else models[0])
+        # 兼容性处理：优先尝试指定的 flash 模型
+        return genai.GenerativeModel("gemini-1.5-flash")
     except Exception as e:
         st.error(f"AI 初始化失败: {e}")
         st.stop()
@@ -51,7 +50,9 @@ def load_data_from_github():
 
 def save_data_to_github(df):
     repo = get_github_repo()
-    if not repo: return
+    if not repo: 
+        st.error("无法连接 GitHub 仓库")
+        return
     csv_string = df.to_csv(index=False, encoding='utf-8-sig')
     try:
         contents = repo.get_contents("house_data.csv")
@@ -80,7 +81,8 @@ def analyze_house_image(uploaded_file):
         注意：仅返回 JSON 格式，不要包含Markdown代码块外壳。
         """
         response = model.generate_content([prompt, img])
-        clean_text = re.sub(r'```json|```', '', response.text).strip()
+        # 提取 JSON 的健壮写法
+        clean_text = re.search(r'\{.*\}', response.text, re.DOTALL).group()
         return json.loads(clean_text)
     except: return None
 
@@ -88,8 +90,9 @@ def get_transit(origin, destination):
     prompt = f"从[{origin}]到[{destination}]通勤，返回JSON: {{\"mins\": 整数, \"yen\": 单程, \"pass\": 月定期}}"
     try:
         response = model.generate_content(prompt)
-        return json.loads(re.sub(r'```json|```', '', response.text).strip())
-    except: return None
+        clean_text = re.search(r'\{.*\}', response.text, re.DOTALL).group()
+        return json.loads(clean_text)
+    except: return {"mins": 0, "yen": 0, "pass": 0}
 
 # --- 4. UI 界面 ---
 st.title("🗼 东京生活成本 AI 计算器 Pro")
@@ -127,43 +130,53 @@ with st.expander("➕ 录入新房源 (支持手动/AI 模式切换)", expanded=
                 st.session_state.ai_cache = {
                     "name": res.get("name", ""),
                     "station": res.get("station", ""),
-                    "rent": res.get("rent", 0) if use_ai_calc else 0,
-                    "admin": res.get("admin", 0) if use_ai_calc else 0,
-                    "initial": res.get("initial_total", 0) if use_ai_calc else 0,
-                    "details": res.get("details", "") if use_ai_calc else "手动模式",
-                    "area": res.get("area", ""),
+                    "rent": res.get("rent", 0),
+                    "admin": res.get("admin", 0),
+                    "initial": res.get("initial_total", 0),
+                    "details": res.get("details", ""),
+                    "area": str(res.get("area", "")),
                     "layout": res.get("layout", "")
                 }
 
+    # 关键修复点：使用 helper 函数确保 int() 转换安全
+    def safe_int(val):
+        try:
+            return int(float(val)) if val is not None else 0
+        except:
+            return 0
+
     c1, c2 = st.columns(2)
-    name_in = c1.text_input("🏠 房源名称", value=st.session_state.ai_cache["name"])
-    loc_in = c2.text_input("📍 最近车站", value=st.session_state.ai_cache["station"])
+    name_in = c1.text_input("🏠 房源名称", value=st.session_state.ai_cache.get("name", ""))
+    loc_in = c2.text_input("📍 最近车站", value=st.session_state.ai_cache.get("station", ""))
     
     r1, r2, r3 = st.columns(3)
-    rent_in = r1.number_input("💰 月租(円)", value=int(st.session_state.ai_cache["rent"]))
-    adm_in = r2.number_input("🏢 管理费", value=int(st.session_state.ai_cache["admin"]))
-    ini_in = r3.number_input("🔑 初期资金投入", value=int(st.session_state.ai_cache["initial"]))
+    # 修复崩溃点：
+    rent_in = r1.number_input("💰 月租(円)", value=safe_int(st.session_state.ai_cache.get("rent")))
+    adm_in = r2.number_input("🏢 管理费", value=safe_int(st.session_state.ai_cache.get("admin")))
+    ini_in = r3.number_input("🔑 初期资金投入", value=safe_int(st.session_state.ai_cache.get("initial")))
     
     c_area, c_layout = st.columns(2)
     area_in = c_area.text_input("📐 面积 (m²)", value=st.session_state.ai_cache.get("area", ""))
     layout_in = c_layout.text_input("🧱 户型 (如 1LDK)", value=st.session_state.ai_cache.get("layout", ""))
-    det_in = st.text_input("📝 初期明细备注", value=st.session_state.ai_cache["details"])
+    det_in = st.text_input("📝 初期明细备注", value=st.session_state.ai_cache.get("details", ""))
 
     if st.button("🚀 计算并添加到清单", use_container_width=True):
-        with st.spinner("解析路径中..."):
-            s_d = get_transit(loc_in, dest_school)
-            j_d = get_transit(loc_in, dest_juku)
-            img_b64 = ""
-            if up_file:
-                img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
-            
-            if s_d and j_d:
+        if not loc_in:
+            st.warning("请输入车站名称以计算通勤时间")
+        else:
+            with st.spinner("解析路径中..."):
+                s_d = get_transit(loc_in, dest_school)
+                j_d = get_transit(loc_in, dest_juku)
+                img_b64 = ""
+                if up_file:
+                    img_b64 = f"data:image/png;base64,{base64.b64encode(up_file.getvalue()).decode()}"
+                
                 new_row = {
                     "房源名称": name_in, "房源位置": loc_in, "房源图片": img_b64,
                     "月房租(円)": rent_in, "管理费(円)": adm_in, "初期资金投入": ini_in, 
                     "初期费用明细": det_in, "面积": area_in, "户型": layout_in,
-                    "学时(分)": s_d['mins'], "学费(单程)": s_d['yen'], "学定期(月)": s_d.get('pass', 0),
-                    "塾时(分)": j_d['mins'], "塾费(单程)": j_d['yen'], "塾定期(月)": j_d.get('pass', 0)
+                    "学时(分)": s_d.get('mins', 0), "学费(单程)": s_d.get('yen', 0), "学定期(月)": s_d.get('pass', 0),
+                    "塾时(分)": j_d.get('mins', 0), "塾费(单程)": j_d.get('yen', 0), "塾定期(月)": j_d.get('pass', 0)
                 }
                 st.session_state.df_houses = pd.concat([st.session_state.df_houses, pd.DataFrame([new_row])], ignore_index=True)
                 st.rerun()
@@ -176,7 +189,7 @@ for col in num_cols:
     if col in df_edit.columns:
         df_edit[col] = pd.to_numeric(df_edit[col], errors='coerce').fillna(0)
 
-edited_df = st.data_editor(df_edit, num_rows="dynamic", use_container_width=True)
+edited_df = st.data_editor(df_edit, num_rows="dynamic", use_container_width=True, key="main_editor")
 st.session_state.df_houses = edited_df
 
 # D. 报告生成与展示
@@ -187,14 +200,22 @@ if not edited_df.empty:
     report_list = []
     for _, row in edited_df.iterrows():
         try:
-            if not row["房源名称"]: continue
-            s_pay = row["学费(单程)"] * 2 * days_school * 4.33
-            best_s = min(s_pay, row["学定期(月)"]) if (use_pass_option and row["学定期(月)"] > 0) else s_pay
-            j_pay = row["塾费(单程)"] * 2 * days_juku * 4.33
-            best_j = min(j_pay, row["塾定期(月)"]) if (use_pass_option and row["塾定期(月)"] > 0) else j_pay
+            if not row["房源名称"] or pd.isna(row["房源名称"]): continue
+            # 确保数值有效
+            r_rent = float(row.get("月房租(円)", 0))
+            r_adm = float(row.get("管理费(円)", 0))
+            r_ini = float(row.get("初期资金投入", 0))
             
-            monthly_fixed = row["月房租(円)"] + row["管理费(円)"] + best_s + best_j + base_living
-            amortized_init = row["初期资金投入"] / (stay_months if stay_months > 0 else 1)
+            s_pay = float(row.get("学费(单程)", 0)) * 2 * days_school * 4.33
+            s_pass = float(row.get("学定期(月)", 0))
+            best_s = min(s_pay, s_pass) if (use_pass_option and s_pass > 0) else s_pay
+            
+            j_pay = float(row.get("塾费(单程)", 0)) * 2 * days_juku * 4.33
+            j_pass = float(row.get("塾定期(月)", 0))
+            best_j = min(j_pay, j_pass) if (use_pass_option and j_pass > 0) else j_pay
+            
+            monthly_fixed = r_rent + r_adm + best_s + best_j + base_living
+            amortized_init = r_ini / (stay_months if stay_months > 0 else 1)
             total = monthly_fixed + amortized_init
             report_list.append({"data": row, "total": total, "fixed": monthly_fixed, "amort": amortized_init})
         except: continue
@@ -206,7 +227,10 @@ if not edited_df.empty:
         with st.container(border=True):
             img_c, info_c, btn_c = st.columns([1.5, 3, 1])
             with img_c:
-                if r["房源图片"]: st.image(r["房源图片"], use_container_width=True)
+                if r.get("房源图片"): 
+                    st.image(r["房源图片"], use_container_width=True)
+                else:
+                    st.info("无图片")
             with info_c:
                 st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
                 st.markdown(f"🏠 **户型: {r.get('户型', 'N/A')} | 面积: {r.get('面积', 'N/A')} m²**")
@@ -227,5 +251,3 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
-
-
