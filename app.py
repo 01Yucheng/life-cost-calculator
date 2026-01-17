@@ -19,8 +19,9 @@ def init_ai():
         st.stop()
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     try:
-        # 兼容性处理：优先使用 gemini-1.5-flash 以支持图片识别
-        return genai.GenerativeModel("gemini-1.5-flash")
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        target = "models/gemini-3-flash"
+        return genai.GenerativeModel(target if target in models else models[0])
     except Exception as e:
         st.error(f"AI 初始化失败: {e}")
         st.stop()
@@ -226,3 +227,4 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
