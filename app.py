@@ -213,6 +213,8 @@ if not edited_df.empty:
                 st.caption(f"⏱️ 耗时: 学校 {int(r.get('学时(分)', 0))}分 / 私塾 {int(r.get('塾时(分)', 0))}分")
 
 
+# --- 在 D. 报告展示部分的修改 ---
+
             with btn_c:
                 # 拼接更精准的搜索关键词：房源名称 + 房源位置
                 start_point = f"{r['房源名称']} {r['房源位置']}"
@@ -223,5 +225,6 @@ if not edited_df.empty:
                 juku_nav_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_point)}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
 
                 st.link_button("🏠 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
-                st.link_button("🏠 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")True)
+                st.link_button("🏠 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+
 
