@@ -211,6 +211,17 @@ if not edited_df.empty:
                         st.info(f"📋 **明细记录**: {r['初期费用明细']}")
                 
                 st.caption(f"⏱️ 耗时: 学校 {int(r.get('学时(分)', 0))}分 / 私塾 {int(r.get('塾时(分)', 0))}分")
+
+
             with btn_c:
-                st.link_button("🏫 学校地图", get_google_maps_url(r['房源位置'], dest_school), use_container_width=True)
-                st.link_button("🎨 私塾地图", get_google_maps_url(r['房源位置'], dest_juku), use_container_width=True)
+                # 拼接更精准的搜索关键词：房源名称 + 房源位置
+                start_point = f"{r['房源名称']} {r['房源位置']}"
+                
+                # 生成跳转到 Google Maps 的导航链接
+                # 模式为：起点 = 具体房源名称，终点 = 你设置的学校/私塾
+                school_nav_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_point)}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
+                juku_nav_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_point)}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
+
+                st.link_button("🏠 从家去学校", school_nav_url, use_container_width=True, help="以公寓楼为起点导航")
+                st.link_button("🏠 从家去私塾", juku_nav_url, use_container_width=True, help="以公寓楼为起点导航")True)
+
