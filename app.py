@@ -75,7 +75,7 @@ def analyze_house_image(uploaded_file):
           "initial_total": 初期费用总和,
           "area": "面积数字",
           "layout": "户型(如1K)",
-          "details": "初期费用明细简述"
+          "details": "初期费用明细"
         }
         注意：仅返回 JSON 格式，不要包含Markdown代码块外壳。
         """
@@ -85,7 +85,7 @@ def analyze_house_image(uploaded_file):
     except: return None
 
 def get_transit(origin, destination):
-    prompt = f"从[{origin}]到[{destination}]通勤，返回JSON: {{\"mins\": 整数, \"yen\": 单程, \"pass\": 月定期}}"
+    prompt = f"作为日本交通专家基于谷歌地图的数据，从[{origin}]到[{destination}]通勤，返回JSON: {{\"mins\": 整数, \"yen\": 单程, \"pass\": 月定期}}"
     try:
         response = model.generate_content(prompt)
         return json.loads(re.sub(r'```json|```', '', response.text).strip())
@@ -227,4 +227,5 @@ if not edited_df.empty:
                 
                 st.link_button("🏫 去学校", school_url, use_container_width=True)
                 st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+
 
