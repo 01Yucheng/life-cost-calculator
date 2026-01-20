@@ -10,7 +10,7 @@ from io import BytesIO
 from PIL import Image
 
 # --- 1. 配置与 AI 初始化 ---
-st.set_page_config(page_title="东京生活成本 AI 计算器 Pro", layout="wide", page_icon="🗼")
+st.set_page_config(page_title="东京生活成本  计算器 Pro", layout="wide", page_icon="")
 
 # 保留你原始的 AI 调用函数，不作更改
 @st.cache_resource
@@ -278,4 +278,5 @@ if not st.session_state.df_houses.empty:
 
     # ... 后续循环渲染逻辑保持不变 ...
     # (由于篇幅限制，后续渲染代码与你原代码一致，只需确保引用的是 st.session_state.df_houses)
+
 
