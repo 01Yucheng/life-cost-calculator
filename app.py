@@ -122,7 +122,7 @@ def get_transit(origin, destination):
     except: return {"mins": 0, "yen": 0, "pass": 0}
 
 # --- 4. UI 界面 ---
-st.title(" 东京生活成本 AI 计算器 Pro")
+st.title(" 东京生活成本计算器")
 
 if "df_houses" not in st.session_state:
     with st.spinner("💾 正在从云端同步数据库..."):
@@ -278,6 +278,7 @@ if not st.session_state.df_houses.empty:
 
     # ... 后续循环渲染逻辑保持不变 ...
     # (由于篇幅限制，后续渲染代码与你原代码一致，只需确保引用的是 st.session_state.df_houses)
+
 
 
 
