@@ -146,7 +146,7 @@ with st.sidebar:
 
 # --- B. 录入新房源 ---
 with st.expander("➕ 录入新房源", expanded=True):
-    up_file = st.file_uploader("🖼️ 上传房源详情图", type=['png', 'jpg', 'jpeg'], key="main_house_uploader")
+    up_file = st.file_uploader(" 上传房源详情图", type=['png', 'jpg', 'jpeg'], key="main_house_uploader")
     
     if "ai_cache" not in st.session_state:
         st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""}
@@ -264,7 +264,7 @@ if not st.session_state.df_houses.empty:
                     st.write(f" **月度固定**: {int(item['fixed']):,} 円")
                     st.write(f" **初期分摊**: +{int(item['amort']):,} 円/月 (总额 {int(r['初期资金投入']):,})")
                     if r.get("初期费用明细"):
-                        st.info(f"📋 明细: {r['初期费用明细']}")
+                        st.info(f" 明细: {r['初期费用明细']}")
                 
                 st.caption(f" 通勤: 学校 {int(r.get('学时(分)', 0))}分 / 私塾 {int(r.get('塾时(分)', 0))}分")
 
@@ -278,5 +278,6 @@ if not st.session_state.df_houses.empty:
 
     # ... 后续循环渲染逻辑保持不变 ...
     # (由于篇幅限制，后续渲染代码与你原代码一致，只需确保引用的是 st.session_state.df_houses)
+
 
 
