@@ -122,7 +122,7 @@ def get_transit(origin, destination):
     except: return {"mins": 0, "yen": 0, "pass": 0}
 
 # --- 4. UI 界面 ---
-st.title("🗼 东京生活成本 AI 计算器 Pro")
+st.title(" 东京生活成本 AI 计算器 Pro")
 
 if "df_houses" not in st.session_state:
     with st.spinner("💾 正在从云端同步数据库..."):
@@ -151,8 +151,8 @@ with st.expander("➕ 录入新房源", expanded=True):
     if "ai_cache" not in st.session_state:
         st.session_state.ai_cache = {"name": "", "station": "", "rent": 0, "admin": 0, "initial": 0, "details": "", "area": "", "layout": ""}
 
-    if up_file and st.button("🔍 AI 扫描房源图"):
-        with st.spinner("AI 正在解析图片并预填表单..."):
+    if up_file and st.button("扫描房源图"):
+        with st.spinner(" 正在解析图片并预填表单..."):
             res = analyze_house_image(up_file)
             if res:
                 st.session_state.ai_cache = {
@@ -177,7 +177,7 @@ with st.expander("➕ 录入新房源", expanded=True):
     layout_in = c_layout.text_input(" 户型", value=cache.get("layout", ""))
     det_in = st.text_input(" 初期明细备注", value=cache.get("details", ""))
 
-    if st.button("🚀 计算并保存到云端", type="primary"):
+    if st.button("计算并保存", type="primary"):
         if not loc_in or not name_in:
             st.warning("请填写房源名称和车站")
         else:
@@ -278,6 +278,7 @@ if not st.session_state.df_houses.empty:
 
     # ... 后续循环渲染逻辑保持不变 ...
     # (由于篇幅限制，后续渲染代码与你原代码一致，只需确保引用的是 st.session_state.df_houses)
+
 
 
 
