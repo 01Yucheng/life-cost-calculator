@@ -16,7 +16,7 @@ st.set_page_config(page_title="东京生活成本 AI 计算器 Pro", layout="wid
 @st.cache_resource
 def init_ai():
     if "GEMINI_API_KEY" not in st.secrets:
-        st.error("🔑 未在 Secrets 中找到 GEMINI_API_KEY")
+        st.error(" 未在 Secrets 中找到 GEMINI_API_KEY")
         st.stop()
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     try:
@@ -73,10 +73,10 @@ def save_data_to_github(df):
     try:
         contents = repo.get_contents("house_data.csv")
         repo.update_file(contents.path, "Update data with images", csv_string, contents.sha)
-        st.success("✅ 数据（含图片）已同步至 GitHub!")
+        st.success(" 数据（含图片）已同步至 GitHub!")
     except Exception:
         repo.create_file("house_data.csv", "Initial commit", csv_string)
-        st.success("🚀 GitHub 数据库已初始化!")
+        st.success(" GitHub 数据库已初始化!")
 
 # --- 3. 工具函数 ---
 def safe_int(val):
@@ -131,14 +131,14 @@ if "df_houses" not in st.session_state:
 # --- 侧边栏配置 ---
 with st.sidebar:
     st.header("⚙️ 全局设置")
-    dest_school = st.text_input("🏫 学校地址", value="东京都新宿区百人町2-24-12 (美都里慕)")
-    dest_juku = st.text_input("🎨 私塾地址", value="东京都荒川区西日暮里2-12-5 (尚艺舍)")
+    dest_school = st.text_input(" 学校地址", value="东京都新宿区百人町2-24-12 (美都里慕)")
+    dest_juku = st.text_input(" 私塾地址", value="东京都荒川区西日暮里2-12-5 (尚艺舍)")
     st.divider()
-    stay_months = st.slider("📅 预计居住时间 (月)", 1, 48, 24)
-    base_living = st.number_input("🍔 月固定基本生活费", value=60000)
-    days_school = st.slider("🏫 学校通勤 (天/周)", 1, 7, 5)
-    days_juku = st.slider("🎨 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
-    use_pass_option = st.toggle("🎫 考虑定期券方案", value=True)
+    stay_months = st.slider(" 预计居住时间 (月)", 1, 48, 24)
+    base_living = st.number_input(" 月固定基本生活费", value=60000)
+    days_school = st.slider(" 学校通勤 (天/周)", 1, 7, 5)
+    days_juku = st.slider(" 私塾通勤 (天/周)", 0.0, 7.0, 0.5, step=0.5)
+    use_pass_option = st.toggle(" 考虑定期券方案", value=True)
     
     st.divider()
     if st.button("🔄 强制同步云端数据", type="primary"):
@@ -164,18 +164,18 @@ with st.expander("➕ 录入新房源", expanded=True):
 
     cache = st.session_state.ai_cache
     c1, c2 = st.columns(2)
-    name_in = c1.text_input("🏠 房源名称", value=cache.get("name", ""))
-    loc_in = c2.text_input("📍 最近车站", value=cache.get("station", ""))
+    name_in = c1.text_input(" 房源名称", value=cache.get("name", ""))
+    loc_in = c2.text_input(" 最近车站", value=cache.get("station", ""))
     
     r1, r2, r3 = st.columns(3)
-    rent_in = r1.number_input("💰 月租(円)", value=safe_int(cache.get("rent")))
-    adm_in = r2.number_input("🏢 管理费", value=safe_int(cache.get("admin")))
-    ini_in = r3.number_input("🔑 初期资金投入", value=safe_int(cache.get("initial")))
+    rent_in = r1.number_input(" 月租(円)", value=safe_int(cache.get("rent")))
+    adm_in = r2.number_input(" 管理费", value=safe_int(cache.get("admin")))
+    ini_in = r3.number_input(" 初期资金投入", value=safe_int(cache.get("initial")))
     
     c_area, c_layout = st.columns(2)
-    area_in = c_area.text_input("📐 面积 (m²)", value=cache.get("area", ""))
-    layout_in = c_layout.text_input("🧱 户型", value=cache.get("layout", ""))
-    det_in = st.text_input("📝 初期明细备注", value=cache.get("details", ""))
+    area_in = c_area.text_input(" 面积 (m²)", value=cache.get("area", ""))
+    layout_in = c_layout.text_input(" 户型", value=cache.get("layout", ""))
+    det_in = st.text_input(" 初期明细备注", value=cache.get("details", ""))
 
     if st.button("🚀 计算并保存到云端", type="primary"):
         if not loc_in or not name_in:
@@ -207,7 +207,7 @@ with st.expander("➕ 录入新房源", expanded=True):
                 st.rerun()
 
 # --- C. 数据清单表 ---
-st.subheader("📝 房源数据清单")
+st.subheader(" 房源数据清单")
 # 修复点：直接将编辑器结果赋值给 session_state 确保表格内的手动修改能生效
 edited_df = st.data_editor(
     st.session_state.df_houses, 
@@ -220,7 +220,7 @@ st.session_state.df_houses = edited_df
 # --- D. 报告展示 (保持原逻辑不变) ---
 if not st.session_state.df_houses.empty:
     st.divider()
-    st.subheader(f"📊 成本分析卡片 (按 {stay_months}月平摊排序)")
+    st.subheader(f" 成本分析卡片 (按 {stay_months}月平摊排序)")
     report_list = []
     for _, row in edited_df.iterrows():
         try:
@@ -257,24 +257,25 @@ if not st.session_state.df_houses.empty:
                     st.info("🖼️ 无房源图")
             with info_c:
                 st.markdown(f"### {'🥇 ' if i==0 else ''}{r['房源名称']} ({r['房源位置']})")
-                st.markdown(f"🏠 **户型: {r.get('户型', 'N/A')} | 面积: {r.get('面积', 'N/A')} m²**")
-                st.write(f"📈 **预计月均总支出: {int(item['total']):,} 円**")
+                st.markdown(f" **户型: {r.get('户型', 'N/A')} | 面积: {r.get('面积', 'N/A')} m²**")
+                st.write(f" **预计月均总支出: {int(item['total']):,} 円**")
                 
-                with st.expander("🔍 查看费用构成"):
-                    st.write(f"🏠 **月度固定**: {int(item['fixed']):,} 円")
-                    st.write(f"🔑 **初期分摊**: +{int(item['amort']):,} 円/月 (总额 {int(r['初期资金投入']):,})")
+                with st.expander(" 查看费用构成"):
+                    st.write(f" **月度固定**: {int(item['fixed']):,} 円")
+                    st.write(f" **初期分摊**: +{int(item['amort']):,} 円/月 (总额 {int(r['初期资金投入']):,})")
                     if r.get("初期费用明细"):
                         st.info(f"📋 明细: {r['初期费用明细']}")
                 
-                st.caption(f"⏱️ 通勤: 学校 {int(r.get('学时(分)', 0))}分 / 私塾 {int(r.get('塾时(分)', 0))}分")
+                st.caption(f" 通勤: 学校 {int(r.get('学时(分)', 0))}分 / 私塾 {int(r.get('塾时(分)', 0))}分")
 
             with btn_c:
                 start_p = f"{r['房源名称']}"
                 school_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_p)}&destination={urllib.parse.quote(dest_school)}&travelmode=transit"
                 juku_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start_p)}&destination={urllib.parse.quote(dest_juku)}&travelmode=transit"
                 
-                st.link_button("🏫 去学校", school_url, use_container_width=True)
-                st.link_button("🎨 去私塾", juku_url, use_container_width=True)
+                st.link_button(" 去学校", school_url, use_container_width=True)
+                st.link_button(" 去私塾", juku_url, use_container_width=True)
 
     # ... 后续循环渲染逻辑保持不变 ...
     # (由于篇幅限制，后续渲染代码与你原代码一致，只需确保引用的是 st.session_state.df_houses)
+
